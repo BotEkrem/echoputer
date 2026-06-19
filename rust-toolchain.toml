@@ -1,0 +1,3 @@
+[toolchain]
+# Espressif's Xtensa Rust fork, installed via `espup install`.
+channel = "esp"

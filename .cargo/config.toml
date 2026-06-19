@@ -1,0 +1,22 @@
+# The `esp` toolchain does NOT ship a prebuilt core for xtensa-esp32s3-none-elf,
+# so we build it from the installed rust-src component.
+[unstable]
+build-std = ["core", "alloc"]
+
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[target.xtensa-esp32s3-none-elf]
+# Direct USB flashing for bring-up. The shippable artifact is built with
+# `espflash save-image` (app-only) — see README.
+runner = "espflash flash --monitor"
+# esp-hal only emits the link-search path; we must pull in its linker script
+# chain (linkall.x -> esp32s3.x -> device.x, which PROVIDEs the interrupt vector
+# symbols) and skip C startup files.
+rustflags = [
+    "-C", "link-arg=-nostartfiles",
+    "-C", "link-arg=-Wl,-Tlinkall.x",
+]
+
+[env]
+ESP_LOG = "info"

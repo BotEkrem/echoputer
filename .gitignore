@@ -1,0 +1,17 @@
+# Rust build output
+/target
+
+# Build artifact — distributed via GitHub Releases, not committed
+/echoputer.bin
+
+# Claude Code / assistant files
+.claude/
+CLAUDE.md
+
+# macOS
+.DS_Store
+
+# Editors / IDEs
+/.idea/
+*.swp
+*.swo

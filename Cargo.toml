@@ -1,0 +1,75 @@
+[package]
+name = "echoputer"
+version = "0.1.0"
+edition = "2021"
+description = "A small no_std operating system for the M5Stack Cardputer ADV"
+license = "MIT"
+
+[[bin]]
+name = "echoputer"
+path = "src/main.rs"
+
+[features]
+# USB-serial radio self-test: at boot, drive every Hacking tool and print results
+# over serial (no keypresses needed), then fall through to the normal menu.
+selftest = []
+
+[dependencies]
+# Core HAL. `unstable` is required for the I2S driver (audio) and a few helpers.
+esp-hal = { version = "1.1.1", features = ["esp32s3", "unstable"] }
+esp-backtrace = { version = "0.19.0", features = ["esp32s3", "panic-handler", "println"] }
+# default feature "auto" picks the USB Serial/JTAG printer on the ESP32-S3.
+esp-println = { version = "0.17.0", features = ["esp32s3"] }
+
+# Display + graphics (no heap required).
+embedded-graphics = "0.8"
+mipidsi = "0.10"
+embedded-hal-bus = "0.3"
+embedded-hal = "1.0"   # for naming the I2c/SpiBus traits in our drivers
+
+# Float helpers for building the wavetable / frequency tables at boot.
+libm = "0.2"
+
+# SD card + FAT for the file browser.
+embedded-sdmmc = { version = "0.9.0", default-features = false }
+# provides the esp_app_desc!() macro — the ESP-IDF app descriptor the bootloader
+# (and the M5 launcher) reads to validate the image.
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3"] }
+
+# Radio stack for the Hacking menu (WiFi/BLE recon). esp-radio (renamed esp-wifi)
+# needs a preemptive scheduler (esp-rtos) + a heap (esp-alloc).
+esp-alloc = { version = "0.10.0" }
+esp-rtos = { version = "0.3.0", features = ["esp32s3", "esp-radio", "esp-alloc"] }
+esp-radio = { version = "0.18.0", features = ["esp32s3", "wifi", "ble", "sniffer", "unstable", "esp-alloc"] }
+# block_on / select: drive esp-radio's async scan + BLE HCI from our sync main loop.
+embassy-futures = "0.1"
+# typed HCI commands/events for the BLE scanner (esp-radio's BleConnector is a bt-hci Transport).
+bt-hci = "0.8"
+
+# no_std TCP/IP stack for the Evil Portal (captive portal). We feed it raw Ethernet
+# frames from the SoftAP interface and hand-roll the DHCP/DNS servers + HTTP on top.
+# no-alloc: all socket buffers are fixed caller-owned arrays (no "alloc"/"std" feature).
+smoltcp = { version = "0.13", default-features = false, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "proto-dhcpv4",
+    "socket-udp",
+    "socket-tcp",
+    "socket-dhcpv4",
+] }
+
+[profile.release]
+opt-level = 3      # audio synth runs in the main loop; keep it fast (flash is 8MB, size is not a concern)
+lto = "fat"
+codegen-units = 1
+overflow-checks = false
+debug = true       # symbols help esp-backtrace; they are stripped from the flashed image
+
+[profile.dev]
+opt-level = 2      # unoptimized audio underruns; keep some opt even in dev
+
+# the radio stack must be optimized or it won't work reliably
+[profile.dev.package.esp-radio]
+opt-level = 3
+[profile.dev.package.esp-rtos]
+opt-level = 3
