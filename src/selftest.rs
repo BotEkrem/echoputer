@@ -9,10 +9,12 @@
 //! the whole sweep takes ~25 s. Any panic/hang shows up on serial against the last
 //! printed step, pinpointing the culprit.
 
+use embedded_graphics::pixelcolor::Rgb565;
 use esp_println::println;
 
 use crate::apps::hacking;
 use crate::apps::repl;
+use crate::hal::ws2812;
 use crate::radio::{ble_spam, wifi_frames, Radio};
 
 /// Run a bounded attack and print its outcome. `limit` caps the tick count.
@@ -201,6 +203,19 @@ pub fn run(radio: &mut Radio) {
     for (label, src) in blocks {
         let out = repl::eval_source(src, &mut env);
         println!("    [{label}] => {}", out.join(" | "));
+    }
+
+    // 12. LED brightness gate — the WS2812 shares the backlight rail and flickers
+    // when the screen is dimmed, so we drive it OFF below full brightness. This
+    // proves it over serial: led on + led_bright=5 throughout, only disp varies —
+    // at full the LED gets a non-zero colour, below full it gets (0,0,0) = off, so
+    // there is physically nothing to flicker in the dimmed scenario the user hit.
+    println!("[*] LED gate (full brightness = on, dimmed = off)...");
+    for disp in [10u8, 9, 7, 5, 1] {
+        let u = crate::led_brightness(true, 5, disp);
+        let (r, g, b) = ws2812::accent_wave(Rgb565::new(31, 20, 8), 0.0, 1.0, u);
+        let state = if u > 0.0 { "ON " } else { "OFF" };
+        println!("    disp={disp:>2}/10  led_user={u:.2}  ws2812 rgb=({r:>3},{g:>3},{b:>3})  {state}");
     }
 
     println!("======== SELFTEST DONE — entering menu ========\n");

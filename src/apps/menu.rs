@@ -16,9 +16,13 @@ pub enum AppKind {
     Hacking,
     Repl,
     Synth,
+    Snake,
     Browser,
+    Stopwatch,
+    Notes,
     Charge,
     Settings,
+    Sysinfo,
 }
 
 pub struct App {
@@ -27,13 +31,17 @@ pub struct App {
 
 // Display order only. The icon, name, sub and action are all keyed off `kind`,
 // NOT the array position, so reordering this list rearranges the menu.
-pub const APPS: [App; 6] = [
+pub const APPS: [App; 10] = [
     App { kind: AppKind::Hacking },
     App { kind: AppKind::Repl },
     App { kind: AppKind::Synth },
+    App { kind: AppKind::Snake },
     App { kind: AppKind::Browser },
+    App { kind: AppKind::Stopwatch },
+    App { kind: AppKind::Notes },
     App { kind: AppKind::Charge },
     App { kind: AppKind::Settings },
+    App { kind: AppKind::Sysinfo },
 ];
 
 /// Localised display name for an app (resolved at draw time so it follows the
@@ -43,9 +51,13 @@ fn app_name(k: AppKind) -> &'static str {
         AppKind::Hacking => "Hacking",
         AppKind::Repl => "REPL",
         AppKind::Synth => "Synthwave",
+        AppKind::Snake => "Snake",
         AppKind::Browser => i18n::t("File Browser", "Dosya Tarayici"),
+        AppKind::Stopwatch => i18n::t("Stopwatch", "Kronometre"),
+        AppKind::Notes => i18n::t("Notes", "Notlar"),
         AppKind::Charge => i18n::t("Charge", "Sarj"),
         AppKind::Settings => i18n::t("Settings", "Ayarlar"),
+        AppKind::Sysinfo => i18n::t("System", "Sistem"),
     }
 }
 
@@ -54,9 +66,13 @@ fn app_sub(k: AppKind) -> &'static str {
         AppKind::Hacking => i18n::t("WiFi/BLE recon + attacks", "WiFi/BLE kesif + saldiri"),
         AppKind::Repl => i18n::t("interactive scripting shell", "etkilesimli betik kabugu"),
         AppKind::Synth => i18n::t("melodic keyboard synth", "melodik klavye synth"),
+        AppKind::Snake => i18n::t("classic snake game", "klasik yilan oyunu"),
         AppKind::Browser => i18n::t("browse + manage SD", "SD gez + yonet"),
+        AppKind::Stopwatch => i18n::t("stopwatch + timer", "kronometre + zamanlayici"),
+        AppKind::Notes => i18n::t("text notes on SD", "SD'de metin notlari"),
         AppKind::Charge => i18n::t("battery status / charging", "pil durumu / sarj"),
         AppKind::Settings => i18n::t("theme + app preferences", "tema + uygulama ayarlari"),
+        AppKind::Sysinfo => i18n::t("device info + stats", "cihaz bilgi + durum"),
     }
 }
 
@@ -109,12 +125,45 @@ fn draw_icon(d: &mut impl DrawTarget<Color = Rgb565>, kind: AppKind, x: i32, y: 
             let _ = Line::new(Point::new(x + 9, y + 13), Point::new(x + 16, y + 13)).into_styled(st).draw(d);
         }
         AppKind::Hacking => {
-            // antenna / signal
-            let _ = Line::new(Point::new(x + 8, y + 4), Point::new(x + 8, y + 16)).into_styled(st).draw(d);
-            let _ = Circle::new(Point::new(x + 6, y), 5).into_styled(st).draw(d);
-            let _ = Line::new(Point::new(x + 3, y + 16), Point::new(x + 13, y + 16)).into_styled(st).draw(d);
-            let _ = Line::new(Point::new(x + 12, y + 5), Point::new(x + 16, y + 2)).into_styled(st).draw(d);
-            let _ = Line::new(Point::new(x + 12, y + 9), Point::new(x + 17, y + 8)).into_styled(st).draw(d);
+            // radar / crosshair — recon + targeting
+            let _ = Circle::new(Point::new(x + 1, y + 1), 15).into_styled(st).draw(d);
+            let _ = Circle::new(Point::new(x + 6, y + 6), 5).into_styled(fl).draw(d);
+            let _ = Line::new(Point::new(x + 8, y - 1), Point::new(x + 8, y + 4)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 8, y + 13), Point::new(x + 8, y + 17)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x - 1, y + 8), Point::new(x + 4, y + 8)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 13, y + 8), Point::new(x + 17, y + 8)).into_styled(st).draw(d);
+        }
+        AppKind::Snake => {
+            // a short chain of body segments curling to a head
+            let seg = [(0, 12), (5, 12), (5, 7), (10, 7), (10, 12), (15, 12)];
+            for &(sx, sy) in seg.iter() {
+                let _ = Rectangle::new(Point::new(x + sx, y + sy), Size::new(4, 4)).into_styled(fl).draw(d);
+            }
+        }
+        AppKind::Stopwatch => {
+            // stopwatch: top button + body circle + a hand
+            let _ = Rectangle::new(Point::new(x + 6, y), Size::new(5, 3)).into_styled(fl).draw(d);
+            let _ = Circle::new(Point::new(x + 2, y + 4), 13).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 8, y + 10), Point::new(x + 8, y + 5)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 8, y + 10), Point::new(x + 12, y + 10)).into_styled(st).draw(d);
+        }
+        AppKind::Notes => {
+            // a sheet with a folded corner + a few text lines
+            let _ = Rectangle::new(Point::new(x + 1, y), Size::new(13, 16)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 10, y), Point::new(x + 14, y + 4)).into_styled(st).draw(d);
+            for i in 0..3i32 {
+                let yy = y + 5 + i * 3;
+                let _ = Line::new(Point::new(x + 3, yy), Point::new(x + 11, yy)).into_styled(st).draw(d);
+            }
+        }
+        AppKind::Sysinfo => {
+            // a chip / IC: body square with pins down both sides
+            let _ = Rectangle::new(Point::new(x + 4, y + 3), Size::new(11, 11)).into_styled(st).draw(d);
+            for i in 0..3i32 {
+                let yy = y + 5 + i * 3;
+                let _ = Line::new(Point::new(x + 1, yy), Point::new(x + 4, yy)).into_styled(st).draw(d);
+                let _ = Line::new(Point::new(x + 15, yy), Point::new(x + 18, yy)).into_styled(st).draw(d);
+            }
         }
     }
 }

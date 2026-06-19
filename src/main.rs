@@ -29,7 +29,9 @@ mod selftest;
 
 // main's own imports of the grouped submodules it drives (hal/ radio/ apps/).
 // Everything else is reached by full path: crate::radio::Radio, crate::theme, etc.
-use crate::apps::{browser, charge, hacking, menu, repl, scales, settings, splash, synth, ui};
+use crate::apps::{
+    browser, charge, hacking, menu, notes, repl, scales, settings, snake, splash, stopwatch, synth, sysinfo, ui,
+};
 use crate::hal::{battery, es8311, fb, tca8418, ws2812};
 use crate::radio::portal;
 
@@ -97,6 +99,10 @@ pub(crate) const K_ENTER: (u8, u8) = (2, 13);
 enum Screen {
     Menu,
     Repl,
+    Snake,
+    Stopwatch,
+    Sysinfo,
+    Notes,
     Synth,
     Browser,
     Settings,
@@ -120,6 +126,19 @@ fn status_dots<D: DrawTarget<Color = Rgb565>>(d: &mut D, audio_ok: bool, kbd_ok:
 /// screen can never be fully blacked out).
 fn bl_pct(b: u8) -> u8 {
     ((b.clamp(1, 10) as u16) * 10).max(15) as u8
+}
+
+/// User brightness for the onboard WS2812 (0.0..=1.0). The LED shares the LCD
+/// backlight's power rail and (per M5's docs) is only powered cleanly at FULL
+/// backlight; at any reduced screen brightness the dimmed backlight ripples the
+/// rail and the LED flickers. So we drive it only at full screen brightness and
+/// hold it dark otherwise — an off LED can't flicker. Returns 0.0 when off/dimmed.
+pub(crate) fn led_brightness(led_on: bool, led_bright: u8, disp_bright: u8) -> f32 {
+    if led_on && disp_bright >= 10 {
+        led_bright as f32 / 10.0
+    } else {
+        0.0
+    }
 }
 
 /// Keep the selected item within the visible scroll window.
@@ -163,9 +182,13 @@ fn main() -> ! {
             // change does not affect any call site.
             duty: timer::config::Duty::Duty10Bit,
             clock_source: timer::LSClockSource::APBClk,
-            // 256 Hz: matches M5GFX. At 5 kHz this panel's backlight collapsed to
-            // black above ~80% duty; 256 Hz dims smoothly.
-            frequency: Rate::from_hz(256),
+            // 1200 Hz: the onboard WS2812 shares this backlight's power rail, and a
+            // low PWM frequency (~256 Hz, near the LED's ~400 Hz response) ripples
+            // that rail and makes the LED flicker when the screen is dimmed. 1200 Hz
+            // sits well above that response so the ripple averages out, while staying
+            // far below the ~5 kHz at which this panel collapsed to black above ~80%
+            // duty. Divider stays in range (~65 at 10-bit), so configure() won't panic.
+            frequency: Rate::from_hz(1200),
         })
         .unwrap();
     let mut backlight = ledc.channel(channel::Number::Channel0, peripherals.GPIO38);
@@ -250,6 +273,10 @@ fn main() -> ! {
     let mut settings_ui = settings::Settings::new();
     let mut hacking = hacking::Hacking::new();
     let mut repl = repl::Repl::new();
+    let mut snake = snake::Snake::new();
+    let mut stopwatch = stopwatch::Stopwatch::new();
+    let mut sysinfo = sysinfo::Sysinfo::new();
+    let mut notes = notes::Notes::new();
     // The Hacking menu's WiFi/BLE radios live behind one owner; peripherals are
     // taken lazily on first use, then kept for the session (see radio.rs).
     let mut radio = radio::Radio::new(peripherals.WIFI, peripherals.BT);
@@ -289,7 +316,15 @@ fn main() -> ! {
     let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
     let mut led = rmt
         .channel0
-        .configure_tx(&TxChannelConfig::default().with_clk_divider(1))
+        // Actively drive GPIO21 LOW between frames (idle_output). The WS2812 wants
+        // its data line resting low; the default leaves it released, which on the
+        // Cardputer's shared LED/backlight rail invites spurious re-latching (flicker).
+        .configure_tx(
+            &TxChannelConfig::default()
+                .with_clk_divider(1)
+                .with_idle_output(true)
+                .with_idle_output_level(Level::Low),
+        )
         .unwrap()
         .with_pin(peripherals.GPIO21);
     let mut led_phase = 0.0f32;
@@ -344,6 +379,7 @@ fn main() -> ! {
                     match screen {
                         Screen::Repl => repl.toggle_caps(&mut fbuf),
                         Screen::Hacking => hacking.toggle_caps(&mut fbuf),
+                        Screen::Notes => notes.toggle_caps(&mut fbuf),
                         _ => {}
                     }
                     last_input = Instant::now();
@@ -367,16 +403,20 @@ fn main() -> ! {
             let rc = (ev.row, ev.col);
 
             if rc == K_HOME {
+                if screen == Screen::Notes {
+                    notes.save_if_dirty(&vm); // persist before jumping home
+                }
                 screen = Screen::Menu;
                 menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                 continue;
             }
 
             // Backspace = go back one step (the job G0 does, on a key that's easy to
-            // reach). In the Hacking text-entry field Backspace edits text instead, so
-            // let that screen handle it.
+            // reach). In the Hacking / Notes text-entry fields Backspace edits text
+            // instead, so let those screens handle it.
             if rc == K_BACKSPACE
                 && !(screen == Screen::Hacking && hacking.is_editing())
+                && !(screen == Screen::Notes && notes.is_editing())
                 && screen != Screen::Repl
             {
                 match screen {
@@ -442,6 +482,26 @@ fn main() -> ! {
                             synth.silence();
                             repl.enter(&mut fbuf);
                         }
+                        menu::AppKind::Snake => {
+                            screen = Screen::Snake;
+                            synth.silence();
+                            snake.enter(&mut fbuf);
+                        }
+                        menu::AppKind::Stopwatch => {
+                            screen = Screen::Stopwatch;
+                            synth.silence();
+                            stopwatch.enter(&mut fbuf);
+                        }
+                        menu::AppKind::Sysinfo => {
+                            screen = Screen::Sysinfo;
+                            synth.silence();
+                            sysinfo.enter(&mut fbuf);
+                        }
+                        menu::AppKind::Notes => {
+                            screen = Screen::Notes;
+                            synth.silence();
+                            notes.enter(&vm, &mut fbuf);
+                        }
                     },
                     _ => {}
                 },
@@ -462,6 +522,10 @@ fn main() -> ! {
                     }
                 },
                 Screen::Repl => repl.on_key(rc, &mut fbuf),
+                Screen::Snake => snake.on_key(rc, &mut fbuf),
+                Screen::Stopwatch => stopwatch.on_key(rc, &mut fbuf),
+                Screen::Sysinfo => sysinfo.on_key(rc, &mut fbuf),
+                Screen::Notes => notes.on_key(rc, &vm, &mut fbuf),
                 Screen::Browser => browser.on_key(rc, &vm, &mut fbuf),
                 Screen::Settings => {
                     if settings_ui.on_key(rc, &mut config, &mut fbuf) {
@@ -732,6 +796,14 @@ fn main() -> ! {
                         }
                         dirty = true;
                     }
+                    Screen::Notes => {
+                        // G0 = save + back to the slot list; pop to the menu at the top
+                        if !notes.back(&vm, &mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                        dirty = true;
+                    }
                     _ => {
                         screen = Screen::Menu;
                         menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
@@ -762,16 +834,26 @@ fn main() -> ! {
             if led_phase > 6.2831 {
                 led_phase -= 6.2831;
             }
-            let led_user = if config.led_on { config.led_bright as f32 / 10.0 } else { 0.0 };
+            // Drive the LED only at full screen brightness (see led_brightness): on a
+            // dimmed backlight the shared power rail ripples and the LED flickers.
+            let led_user = led_brightness(config.led_on, config.led_bright, config.disp_bright);
             let (r, g, b) = ws2812::accent_wave(theme::accent(), synth.level(), led_phase, led_user);
             let data = ws2812::encode(r, g, b);
             led = match led.transmit(&data) {
                 Ok(tx) => tx.wait().unwrap_or_else(|(_, c)| c),
                 Err((_, c)) => c,
             };
-            if screen == Screen::Synth {
-                ui::draw_vu(&mut fbuf, synth.level(), synth.active_voices(), mode);
-                dirty = true;
+            // per-app periodic updates (each app rate-limits itself and only
+            // reports `true` when it actually redrew, so we blit no more than needed)
+            match screen {
+                Screen::Synth => {
+                    ui::draw_vu(&mut fbuf, synth.level(), synth.active_voices(), mode);
+                    dirty = true;
+                }
+                Screen::Snake => dirty |= snake.tick(&mut fbuf),
+                Screen::Stopwatch => dirty |= stopwatch.tick(&mut fbuf),
+                Screen::Sysinfo => dirty |= sysinfo.tick(&mut fbuf),
+                _ => {}
             }
         }
 

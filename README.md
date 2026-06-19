@@ -27,16 +27,27 @@ Hacking is the security toolkit and has its own section below. The rest:
   `len` and `range`. Blocks are indented and run on a blank line, and `help`
   lists the syntax. A step budget and a recursion cap keep a bad script from
   hanging or crashing the device.
+- Snake is the classic game on a grid below the top bar. The arrow cluster
+  steers, food grows the snake and bumps the score, and it speeds up as you go;
+  hitting a wall or yourself ends the run and any key starts a fresh one.
 - Synthwave turns the keyboard into a small wavetable synth. Notes are quantised
   to a scale, with pitch rising left to right and bottom to top, so mashing keys
   still comes out musical. G0 cycles the scale and the LED pulses with the audio.
 - File Browser walks the SD card and opens any file in a text or hex viewer it
   picks automatically. Deleting a file is real and asks first.
+- Stopwatch is a stopwatch and a countdown timer in one (there is no wall clock —
+  the ADV has no RTC battery, so time of day is left out on purpose). ENTER
+  starts and pauses; left/right switch mode; up/down set the timer target.
+- Notes is a tiny text editor over six SD slots under `/ECHO/NOTES/`. Pick a
+  slot, type (ENTER inserts a newline, the `Aa` key toggles case), and it saves
+  back to the card automatically when you leave the editor.
 - Charge is a full-screen battery gauge for leaving the device on the charger;
   the ADV only charges while it is powered on.
 - Settings holds the preferences, grouped into General, Synthwave and File
   Browser, and writes them to `/ECHO/DATA/CONFIG.BIN`. With no card inserted
   everything still works, the settings just don't persist across reboots.
+- System is a read-only monitor: free/used heap, uptime, battery, MAC address
+  and chip, refreshed once a second.
 
 ## Hacking suite
 
@@ -153,7 +164,8 @@ src/
     netscan       the LAN scanner
 
   apps/         the home screen and the apps
-    menu, splash, repl, synth, scales, ui, browser, charge, settings, hacking, wiki
+    menu, splash, repl, snake, stopwatch, notes, sysinfo, synth, scales, ui,
+    browser, charge, settings, hacking, wiki
 ```
 
 ## Hardware
