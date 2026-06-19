@@ -20,6 +20,13 @@ is bilingual, English and Turkish, switchable live from Settings.
 
 Hacking is the security toolkit and has its own section below. The rest:
 
+- REPL is an interactive shell over a small built-in interpreter. It's not a real
+  language VM, just a no_std tree-walker for a familiar scripting subset: int,
+  float, bool, str, list and dict; arithmetic, comparisons and `and`/`or`/`not`;
+  `if`/`elif`/`else`, `while`, `for`, `def`/`return`; and builtins like `print`,
+  `len` and `range`. Blocks are indented and run on a blank line, and `help`
+  lists the syntax. A step budget and a recursion cap keep a bad script from
+  hanging or crashing the device.
 - Synthwave turns the keyboard into a small wavetable synth. Notes are quantised
   to a scale, with pitch rising left to right and bottom to top, so mashing keys
   still comes out musical. G0 cycles the scale and the LED pulses with the audio.
@@ -146,7 +153,7 @@ src/
     netscan       the LAN scanner
 
   apps/         the home screen and the apps
-    menu, splash, synth, scales, ui, browser, charge, settings, hacking, wiki
+    menu, splash, repl, synth, scales, ui, browser, charge, settings, hacking, wiki
 ```
 
 ## Hardware

@@ -12,6 +12,7 @@
 use esp_println::println;
 
 use crate::apps::hacking;
+use crate::apps::repl;
 use crate::radio::{ble_spam, wifi_frames, Radio};
 
 /// Run a bounded attack and print its outcome. `limit` caps the tick count.
@@ -155,6 +156,51 @@ pub fn run(radio: &mut Radio) {
     // 9. BLE spam — every mode briefly.
     for m in ble_spam::Mode::ALL {
         attack(m.label(), "adverts", 30, |tick| radio.ble_spam(m, tick));
+    }
+
+    // 11. REPL interpreter — can't be keyboard-driven here, so feed lines/blocks
+    // through eval_source() and print what the shell would show. `env` persists
+    // across entries to exercise variables, functions and the data types.
+    println!("[*] REPL interpreter — single lines...");
+    let mut env = repl::Env::new();
+    let lines = [
+        "2 + 3 * 4",
+        "(2 + 3) * 4",
+        "x = 10",
+        "x * x",
+        "2 ** 10",
+        "7 / 2",
+        "7 // 2",
+        "10 % 3",
+        "abs(-5)",
+        "print(\"hi\", 1 + 1)",
+        "1 < 2 and 2 <= 2",
+        "[1, 2, 3] + [4]",
+        "len(\"hello\")",
+        "d = {\"a\": 1, \"b\": 2}",
+        "d[\"a\"]",
+        "y", // NameError
+    ];
+    for line in lines {
+        let out = repl::eval_source(line, &mut env);
+        if out.is_empty() {
+            println!("    >>> {line}");
+        } else {
+            println!("    >>> {line}  =>  {}", out.join(" | "));
+        }
+    }
+
+    println!("[*] REPL interpreter — multi-line blocks...");
+    let blocks: [(&str, &str); 5] = [
+        ("for loop sum", "s = 0\nfor i in range(5):\n s += i\nprint(s)"),
+        ("if/elif/else", "n = 7\nif n < 5:\n print(\"low\")\nelif n < 10:\n print(\"mid\")\nelse:\n print(\"high\")"),
+        ("def + return", "def sq(a):\n return a * a\nprint(sq(9))"),
+        ("recursion (factorial)", "def f(n):\n if n <= 1:\n  return 1\n return n * f(n - 1)\nprint(f(5))"),
+        ("list build + index", "xs = []\nfor i in range(3):\n xs += [i * i]\nprint(xs)\nprint(xs[-1])"),
+    ];
+    for (label, src) in blocks {
+        let out = repl::eval_source(src, &mut env);
+        println!("    [{label}] => {}", out.join(" | "));
     }
 
     println!("======== SELFTEST DONE — entering menu ========\n");

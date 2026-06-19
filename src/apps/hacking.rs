@@ -335,6 +335,7 @@ pub struct Hacking {
     attack_sent: u32,
     scan_failed: bool,
     cfg: Cfg,
+    caps: bool, // "Aa" caps toggle for the SSID/portal name fields
 }
 
 impl Hacking {
@@ -354,6 +355,15 @@ impl Hacking {
             attack_sent: 0,
             scan_failed: false,
             cfg: Cfg::new(),
+            caps: true, // SSID/portal names default to uppercase; "Aa" toggles
+        }
+    }
+
+    /// Flip the caps state (driven by the "Aa" key) and refresh the indicator.
+    pub fn toggle_caps<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
+        if self.view == View::TextInput {
+            self.caps = !self.caps;
+            self.draw(d, false);
         }
     }
 
@@ -653,7 +663,7 @@ impl Hacking {
             self.draw(d, false);
             return Action::Redraw;
         }
-        if let Some(b) = keymap::ch(rc.0, rc.1) {
+        if let Some(b) = keymap::ch_shift(rc.0, rc.1, self.caps) {
             match self.edit {
                 Edit::Prefix => {
                     if self.cfg.prefix_len < self.cfg.prefix.len() {
@@ -1013,6 +1023,8 @@ impl Hacking {
         theme::card(d, theme::PAD, 44, (theme::W - 2 * theme::PAD) as u32, 22, Some(theme::accent()));
         let shown: alloc::string::String = alloc::format!("{}_", buf);
         theme::text(d, &shown, theme::PAD + 8, 51, theme::TITLE_FONT, theme::FG);
+        // caps indicator in the box's right edge (the "Aa" key toggles it)
+        theme::text_right(d, if self.caps { "ABC" } else { "abc" }, theme::W - theme::PAD - 6, 51, theme::BODY_FONT, theme::MUTED);
         if matches!(self.edit, Edit::Prefix) {
             theme::text_center(d, i18n::t("becomes NAME001, NAME002 ...", "NAME001, NAME002 ... olur"), theme::W / 2, 78, theme::BODY_FONT, theme::MUTED);
         }

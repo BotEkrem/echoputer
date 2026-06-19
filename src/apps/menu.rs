@@ -14,6 +14,7 @@ use crate::theme;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum AppKind {
     Hacking,
+    Repl,
     Synth,
     Browser,
     Charge,
@@ -26,8 +27,9 @@ pub struct App {
 
 // Display order only. The icon, name, sub and action are all keyed off `kind`,
 // NOT the array position, so reordering this list rearranges the menu.
-pub const APPS: [App; 5] = [
+pub const APPS: [App; 6] = [
     App { kind: AppKind::Hacking },
+    App { kind: AppKind::Repl },
     App { kind: AppKind::Synth },
     App { kind: AppKind::Browser },
     App { kind: AppKind::Charge },
@@ -39,6 +41,7 @@ pub const APPS: [App; 5] = [
 fn app_name(k: AppKind) -> &'static str {
     match k {
         AppKind::Hacking => "Hacking",
+        AppKind::Repl => "REPL",
         AppKind::Synth => "Synthwave",
         AppKind::Browser => i18n::t("File Browser", "Dosya Tarayici"),
         AppKind::Charge => i18n::t("Charge", "Sarj"),
@@ -49,6 +52,7 @@ fn app_name(k: AppKind) -> &'static str {
 fn app_sub(k: AppKind) -> &'static str {
     match k {
         AppKind::Hacking => i18n::t("WiFi/BLE recon + attacks", "WiFi/BLE kesif + saldiri"),
+        AppKind::Repl => i18n::t("interactive scripting shell", "etkilesimli betik kabugu"),
         AppKind::Synth => i18n::t("melodic keyboard synth", "melodik klavye synth"),
         AppKind::Browser => i18n::t("browse + manage SD", "SD gez + yonet"),
         AppKind::Charge => i18n::t("battery status / charging", "pil durumu / sarj"),
@@ -97,6 +101,12 @@ fn draw_icon(d: &mut impl DrawTarget<Color = Rgb565>, kind: AppKind, x: i32, y: 
                 let _ = Line::new(Point::new(x, yy), Point::new(x + 16, yy)).into_styled(st).draw(d);
                 let _ = Rectangle::new(Point::new(x + k, yy - 2), Size::new(4, 5)).into_styled(fl).draw(d);
             }
+        }
+        AppKind::Repl => {
+            // ">_" shell prompt
+            let _ = Line::new(Point::new(x + 1, y + 3), Point::new(x + 7, y + 8)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 7, y + 8), Point::new(x + 1, y + 13)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 9, y + 13), Point::new(x + 16, y + 13)).into_styled(st).draw(d);
         }
         AppKind::Hacking => {
             // antenna / signal

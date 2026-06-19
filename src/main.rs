@@ -29,7 +29,7 @@ mod selftest;
 
 // main's own imports of the grouped submodules it drives (hal/ radio/ apps/).
 // Everything else is reached by full path: crate::radio::Radio, crate::theme, etc.
-use crate::apps::{browser, charge, hacking, menu, scales, settings, splash, synth, ui};
+use crate::apps::{browser, charge, hacking, menu, repl, scales, settings, splash, synth, ui};
 use crate::hal::{battery, es8311, fb, tca8418, ws2812};
 use crate::radio::portal;
 
@@ -96,6 +96,7 @@ pub(crate) const K_ENTER: (u8, u8) = (2, 13);
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Menu,
+    Repl,
     Synth,
     Browser,
     Settings,
@@ -248,6 +249,7 @@ fn main() -> ! {
     let mut browser = browser::Browser::new();
     let mut settings_ui = settings::Settings::new();
     let mut hacking = hacking::Hacking::new();
+    let mut repl = repl::Repl::new();
     // The Hacking menu's WiFi/BLE radios live behind one owner; peripherals are
     // taken lazily on first use, then kept for the session (see radio.rs).
     let mut radio = radio::Radio::new(peripherals.WIFI, peripherals.BT);
@@ -334,6 +336,21 @@ fn main() -> ! {
     loop {
         // ---- keyboard ----
         while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+            // The "Aa" key is a caps toggle (the keyboard has no hardware caps-lock):
+            // tap to flip case for whichever screen is taking text input. It types
+            // nothing itself; we act on the press edge and ignore the release.
+            if (ev.row, ev.col) == crate::hal::keymap::K_SHIFT {
+                if ev.pressed {
+                    match screen {
+                        Screen::Repl => repl.toggle_caps(&mut fbuf),
+                        Screen::Hacking => hacking.toggle_caps(&mut fbuf),
+                        _ => {}
+                    }
+                    last_input = Instant::now();
+                    dirty = true; // flush the indicator this frame, not on the next key
+                }
+                continue;
+            }
             if !ev.pressed {
                 continue;
             }
@@ -358,7 +375,10 @@ fn main() -> ! {
             // Backspace = go back one step (the job G0 does, on a key that's easy to
             // reach). In the Hacking text-entry field Backspace edits text instead, so
             // let that screen handle it.
-            if rc == K_BACKSPACE && !(screen == Screen::Hacking && hacking.is_editing()) {
+            if rc == K_BACKSPACE
+                && !(screen == Screen::Hacking && hacking.is_editing())
+                && screen != Screen::Repl
+            {
                 match screen {
                     Screen::Menu => {}
                     Screen::Hacking => {
@@ -417,6 +437,11 @@ fn main() -> ! {
                             synth.silence();
                             hacking.enter(&mut fbuf);
                         }
+                        menu::AppKind::Repl => {
+                            screen = Screen::Repl;
+                            synth.silence();
+                            repl.enter(&mut fbuf);
+                        }
                     },
                     _ => {}
                 },
@@ -436,6 +461,7 @@ fn main() -> ! {
                         ui::draw_note(&mut fbuf, Some(midi), mode);
                     }
                 },
+                Screen::Repl => repl.on_key(rc, &mut fbuf),
                 Screen::Browser => browser.on_key(rc, &vm, &mut fbuf),
                 Screen::Settings => {
                     if settings_ui.on_key(rc, &mut config, &mut fbuf) {

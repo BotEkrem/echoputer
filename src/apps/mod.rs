@@ -6,6 +6,7 @@ pub mod browser;
 pub mod charge;
 pub mod hacking;
 pub mod menu;
+pub mod repl;
 pub mod scales;
 pub mod settings;
 pub mod splash;
