@@ -48,22 +48,12 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
 
-      # Advisory only: report formatting drift without failing the build.
-      - name: Format check
-        run: cargo fmt --all -- --check
-        continue-on-error: true
-
-      # --- hard gates: the firmware must compile, both variants ---
+      # --- the gates: the firmware must compile, both variants ---
       - name: Build (release)
         run: cargo build --release
 
       - name: Build (self-test feature)
         run: cargo build --release --features selftest
-
-      # Advisory only: surface clippy lints without failing the build.
-      - name: Clippy
-        run: cargo clippy --release
-        continue-on-error: true
 
       # Produce the app-only image the README/Launcher flash, from the release
       # ELF, and publish it as a build artifact. `save-image` is offline (no
