@@ -15,7 +15,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
-use embedded_sdmmc::{BlockDevice, Mode as FileMode, TimeSource, VolumeIdx, VolumeManager};
+use embedded_sdmmc::{BlockDevice, DirEntry, Mode as FileMode, ShortFileName, TimeSource, VolumeIdx, VolumeManager};
 
 use crate::hal::keymap;
 use crate::{i18n, theme};
@@ -65,21 +65,35 @@ impl Notes {
 
     // ----------------------------- SD I/O -----------------------------
 
-    /// Mark which slots already have a file on the card.
+    /// Mark which slots already have a file on the card. One directory pass:
+    /// at 400 kHz each `open_file_in_dir` re-walks the NOTES directory, so probing
+    /// all six slots that way froze the screen on entry. `iterate_dir` reads the
+    /// directory exactly once.
     fn scan<D: BlockDevice, T: TimeSource>(&mut self, vm: &VolumeManager<D, T>) {
-        self.used = [false; SLOTS];
+        let mut found = [false; SLOTS];
         let _ = (|| -> Option<()> {
             let vol = vm.open_volume(VolumeIdx(0)).ok()?;
             let mut dir = vol.open_root_dir().ok()?;
             dir.change_dir(DIR_APP).ok()?;
             dir.change_dir(DIR_NOTES).ok()?;
-            for i in 0..SLOTS {
-                if dir.open_file_in_dir(SLOT_NAMES[i], FileMode::ReadOnly).is_ok() {
-                    self.used[i] = true;
+            dir.iterate_dir(|e: &DirEntry| {
+                if e.attributes.is_directory() {
+                    return;
                 }
-            }
+                let mut buf = [0u8; 13]; // "NOTE1.TXT" is 9 chars; 8.3 max is 12
+                let n = fmt_name(&e.name, &mut buf);
+                if let Ok(name) = core::str::from_utf8(&buf[..n]) {
+                    for (i, slot) in SLOT_NAMES.iter().enumerate() {
+                        if name.eq_ignore_ascii_case(slot) {
+                            found[i] = true;
+                        }
+                    }
+                }
+            })
+            .ok()?;
             Some(())
         })();
+        self.used = found;
     }
 
     /// Load a slot's file into `buf` (empty buffer if it doesn't exist yet).
@@ -277,4 +291,28 @@ impl Notes {
         let hint = format!("ENTER nl  bksp  G0 save  {}", if self.caps { "ABC" } else { "abc" });
         theme::hint(d, &hint);
     }
+}
+
+/// Format an 8.3 directory-entry name (e.g. "NOTE1.TXT") into `buf`; returns its
+/// length. ShortFileName implements Display, so we just render it into bytes.
+fn fmt_name(name: &ShortFileName, buf: &mut [u8; 13]) -> usize {
+    use core::fmt::Write;
+    struct W<'a> {
+        b: &'a mut [u8; 13],
+        n: usize,
+    }
+    impl core::fmt::Write for W<'_> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            for &c in s.as_bytes() {
+                if self.n < self.b.len() {
+                    self.b[self.n] = c;
+                    self.n += 1;
+                }
+            }
+            Ok(())
+        }
+    }
+    let mut w = W { b: buf, n: 0 };
+    let _ = write!(w, "{}", name);
+    w.n
 }

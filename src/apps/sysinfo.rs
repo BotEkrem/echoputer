@@ -36,6 +36,15 @@ enum Row {
     Mac,
 }
 
+impl Row {
+    /// Rows whose value can change while the screen is open. The static rows
+    /// (Chip, Cores, Mac) are painted once in `enter` and never re-checked, so
+    /// `tick` skips them — no per-second String allocation for an unchanging value.
+    fn is_dynamic(self) -> bool {
+        matches!(self, Row::Heap | Row::HeapUse | Row::Uptime | Row::Battery)
+    }
+}
+
 const ROWS: [Row; 7] = [
     Row::Chip,
     Row::Cores,
@@ -101,6 +110,9 @@ impl Sysinfo {
 
         let mut changed = false;
         for (i, &row) in ROWS.iter().enumerate() {
+            if !row.is_dynamic() {
+                continue; // static row: drawn once in enter(), never re-allocated here
+            }
             if value_for(row, self.boot) != self.shown[i] {
                 self.draw_value(d, i, row);
                 changed = true;

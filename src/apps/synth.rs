@@ -198,6 +198,14 @@ impl Synth {
 
     /// Render interleaved stereo (L,R,L,R...) into `out`; `out.len()` must be even.
     pub fn fill_stereo(&mut self, out: &mut [i16]) {
+        // Idle fast path: with no active voice every frame mixes to exactly 0.0
+        // (Voice::render returns 0.0 when inactive, touching no state), so the
+        // output is bit-identical to the full loop — skip it and just decay the VU.
+        if !self.voices.iter().any(|v| v.active) {
+            out.fill(0);
+            self.level += (0.0 - self.level) * 0.30;
+            return;
+        }
         let frames = out.len() / 2;
         let mut peak = 0.0f32;
         for f in 0..frames {

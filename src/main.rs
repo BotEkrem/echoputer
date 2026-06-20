@@ -214,7 +214,9 @@ fn main() -> ! {
     let rst = Output::new(peripherals.GPIO33, Level::High, OutputConfig::default());
 
     let spi_device = ExclusiveDevice::new(spi, cs, delay).unwrap();
-    let mut spi_buf = [0u8; 512];
+    // mipidsi chunks the 64,800-byte frame through this staging buffer; 4 KB cuts
+    // a full blit from ~127 SPI transactions to ~16 (byte-identical output).
+    let mut spi_buf = [0u8; 4096];
     let di = SpiInterface::new(spi_device, dc, &mut spi_buf);
 
     let mut display = Builder::new(ST7789, di)
@@ -328,15 +330,16 @@ fn main() -> ! {
         .unwrap()
         .with_pin(peripherals.GPIO21);
     let mut led_phase = 0.0f32;
+    let mut led_was_dark = false; // true once we've sent the off-frame for a dark LED
 
     // ---------------- Button + state machine ----------------
     let g0 = Input::new(peripherals.GPIO0, InputConfig::default().with_pull(Pull::Up));
     let mut g0_prev_low = false;
 
     let mut samples = [0i16; CHUNK_FRAMES * 2];
-    let mut bytes = [0u8; CHUNK_FRAMES * 4];
-    let chunk_bytes = bytes.len();
+    let chunk_bytes = core::mem::size_of_val(&samples); // i16 buffer pushed as raw LE bytes
     let mut last_anim = Instant::now();
+    let mut last_vu_fw: i32 = -1; // last drawn VU meter fill width (px); gates Synth redraws
 
     // off-screen framebuffer; UI renders here, then one blit per frame -> no flash
     let mut fbuf = fb::FrameBuf::new(unsafe { &mut *core::ptr::addr_of_mut!(FB_DATA) });
@@ -817,12 +820,13 @@ fn main() -> ! {
         // ---- audio: keep the DMA buffer topped up (robust against slow frames) ----
         while transfer.available().unwrap_or(0) >= chunk_bytes {
             synth.fill_stereo(&mut samples);
-            for (i, s) in samples.iter().enumerate() {
-                let b = s.to_le_bytes();
-                bytes[2 * i] = b[0];
-                bytes[2 * i + 1] = b[1];
-            }
-            if transfer.push(&bytes).unwrap_or(0) == 0 {
+            // ESP32-S3 is little-endian, so the i16 sample buffer already has the
+            // exact byte layout the I2S DMA wants — reinterpret it as bytes instead
+            // of repacking element by element (this runs in the tight audio feed).
+            let raw = unsafe {
+                core::slice::from_raw_parts(samples.as_ptr() as *const u8, core::mem::size_of_val(&samples))
+            };
+            if transfer.push(raw).unwrap_or(0) == 0 {
                 break;
             }
         }
@@ -837,18 +841,38 @@ fn main() -> ! {
             // Drive the LED only at full screen brightness (see led_brightness): on a
             // dimmed backlight the shared power rail ripples and the LED flickers.
             let led_user = led_brightness(config.led_on, config.led_bright, config.disp_bright);
-            let (r, g, b) = ws2812::accent_wave(theme::accent(), synth.level(), led_phase, led_user);
-            let data = ws2812::encode(r, g, b);
-            led = match led.transmit(&data) {
-                Ok(tx) => tx.wait().unwrap_or_else(|(_, c)| c),
-                Err((_, c)) => c,
-            };
+            if led_user > 0.0 {
+                let (r, g, b) = ws2812::accent_wave(theme::accent(), synth.level(), led_phase, led_user);
+                let data = ws2812::encode(r, g, b);
+                led = match led.transmit(&data) {
+                    Ok(tx) => tx.wait().unwrap_or_else(|(_, c)| c),
+                    Err((_, c)) => c,
+                };
+                led_was_dark = false;
+            } else if !led_was_dark {
+                // LED just went dark — clear it once, then skip the sinf/encode/
+                // blocking transmit on every later tick while it stays off.
+                let data = ws2812::encode(0, 0, 0);
+                led = match led.transmit(&data) {
+                    Ok(tx) => tx.wait().unwrap_or_else(|(_, c)| c),
+                    Err((_, c)) => c,
+                };
+                led_was_dark = true;
+            }
             // per-app periodic updates (each app rate-limits itself and only
             // reports `true` when it actually redrew, so we blit no more than needed)
             match screen {
                 Screen::Synth => {
-                    ui::draw_vu(&mut fbuf, synth.level(), synth.active_voices(), mode);
-                    dirty = true;
+                    // Only repaint (and blit 64 KB) when the meter's pixel fill
+                    // actually moves; an idle Synth screen otherwise blits at 25 Hz
+                    // for a bit-identical frame. meter() quantises level to this fw.
+                    let vw = theme::W - 2 * theme::PAD;
+                    let fw = (vw as f32 * synth.level().clamp(0.0, 1.0)) as i32;
+                    if fw != last_vu_fw {
+                        last_vu_fw = fw;
+                        ui::draw_vu(&mut fbuf, synth.level(), synth.active_voices(), mode);
+                        dirty = true;
+                    }
                 }
                 Screen::Snake => dirty |= snake.tick(&mut fbuf),
                 Screen::Stopwatch => dirty |= stopwatch.tick(&mut fbuf),

@@ -111,10 +111,18 @@ impl Config {
         let _ = (|| -> Option<()> {
             let vol = vm.open_volume(VolumeIdx(0)).ok()?;
             let mut dir = vol.open_root_dir().ok()?;
-            let _ = dir.make_dir_in_dir(DIR_APP);
-            dir.change_dir(DIR_APP).ok()?;
-            let _ = dir.make_dir_in_dir(DIR_DATA);
-            dir.change_dir(DIR_DATA).ok()?;
+            // Create the dirs only when they don't already exist. save() fires on
+            // every settings change; the old unconditional make_dir_in_dir scanned
+            // both dirs (returning AlreadyExists) on each save — wasted I/O at
+            // 400 kHz. change_dir-first skips that on the steady-state path.
+            if dir.change_dir(DIR_APP).is_err() {
+                dir.make_dir_in_dir(DIR_APP).ok()?;
+                dir.change_dir(DIR_APP).ok()?;
+            }
+            if dir.change_dir(DIR_DATA).is_err() {
+                dir.make_dir_in_dir(DIR_DATA).ok()?;
+                dir.change_dir(DIR_DATA).ok()?;
+            }
             let file = dir.open_file_in_dir(FILE_CFG, FileMode::ReadWriteCreateOrTruncate).ok()?;
             file.write(&buf).ok()?;
             file.flush().ok()?;
