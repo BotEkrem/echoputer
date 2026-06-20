@@ -63,7 +63,10 @@ jobs:
 
       - name: Build flashable image (echoputer.bin)
         run: |
-          cargo binstall -y espflash
+          # --force: the cargo cache may restore the "espflash installed" record
+          # without the binary itself, making binstall skip the install. Forcing it
+          # always lays down the (prebuilt, fast) binary so `espflash` is on PATH.
+          cargo binstall -y --force espflash
           espflash save-image --chip esp32s3 \
             target/xtensa-esp32s3-none-elf/release/echoputer echoputer.bin
 
