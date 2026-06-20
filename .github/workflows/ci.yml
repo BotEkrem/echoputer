@@ -1,0 +1,85 @@
+name: CI
+
+# Build + check the firmware on every push to main and every pull request.
+# The hard gates are the two compiles (normal + self-test feature); formatting
+# and clippy run as non-blocking advisories. A flashable echoputer.bin is built
+# and uploaded so every green commit has a downloadable image.
+
+on:
+  push:
+    branches: [main]
+    # Skip the firmware build for docs-only changes (README edits etc.).
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build + checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Espressif's Xtensa Rust toolchain (the `esp` channel pinned in
+      # rust-toolchain.toml) + LLVM + rust-src. rust-src is required because
+      # .cargo/config.toml builds core/alloc from source for the bare-metal
+      # xtensa-esp32s3-none-elf target (build-std). ldproxy is only needed for
+      # std/esp-idf linking, so it's off here.
+      - name: Install Xtensa Rust toolchain (esp)
+        uses: esp-rs/xtensa-toolchain@v1.7
+        with:
+          default: true
+          buildtargets: esp32s3
+          ldproxy: false
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      # Advisory only: report formatting drift without failing the build.
+      - name: Format check
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+      # --- hard gates: the firmware must compile, both variants ---
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Build (self-test feature)
+        run: cargo build --release --features selftest
+
+      # Advisory only: surface clippy lints without failing the build.
+      - name: Clippy
+        run: cargo clippy --release
+        continue-on-error: true
+
+      # Produce the app-only image the README/Launcher flash, from the release
+      # ELF, and publish it as a build artifact. `save-image` is offline (no
+      # device needed). espflash comes prebuilt via cargo-binstall (fast).
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Build flashable image (echoputer.bin)
+        run: |
+          cargo binstall -y espflash
+          espflash save-image --chip esp32s3 \
+            target/xtensa-esp32s3-none-elf/release/echoputer echoputer.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: echoputer-firmware
+          path: echoputer.bin
+          if-no-files-found: error
