@@ -30,7 +30,7 @@ mod selftest;
 // main's own imports of the grouped submodules it drives (hal/ radio/ apps/).
 // Everything else is reached by full path: crate::radio::Radio, crate::theme, etc.
 use crate::apps::{
-    browser, charge, hacking, menu, notes, repl, scales, settings, snake, splash, stopwatch, synth, sysinfo, ui,
+    browser, charge, games, hacking, menu, notes, repl, scales, settings, splash, stopwatch, synth, sysinfo, ui,
 };
 use crate::hal::{battery, es8311, fb, tca8418, ws2812};
 use crate::radio::portal;
@@ -99,7 +99,7 @@ pub(crate) const K_ENTER: (u8, u8) = (2, 13);
 enum Screen {
     Menu,
     Repl,
-    Snake,
+    Games,
     Stopwatch,
     Sysinfo,
     Notes,
@@ -275,7 +275,7 @@ fn main() -> ! {
     let mut settings_ui = settings::Settings::new();
     let mut hacking = hacking::Hacking::new();
     let mut repl = repl::Repl::new();
-    let mut snake = snake::Snake::new();
+    let mut games = games::Games::new();
     let mut stopwatch = stopwatch::Stopwatch::new();
     let mut sysinfo = sysinfo::Sysinfo::new();
     let mut notes = notes::Notes::new();
@@ -340,6 +340,12 @@ fn main() -> ! {
     let chunk_bytes = core::mem::size_of_val(&samples); // i16 buffer pushed as raw LE bytes
     let mut last_anim = Instant::now();
     let mut last_vu_fw: i32 = -1; // last drawn VU meter fill width (px); gates Synth redraws
+    // Hold-to-repeat (PC-style): SET on press, CLEAR on release (now that the
+    // press/release decode is correct), synthesize repeats in between. A 4 s cap
+    // is a belt-and-suspenders fail-safe against a lost release.
+    let mut kbd_held: Option<(u8, u8)> = None;
+    let mut kbd_held_since = Instant::now();
+    let mut kbd_last_repeat = Instant::now();
 
     // off-screen framebuffer; UI renders here, then one blit per frame -> no flash
     let mut fbuf = fb::FrameBuf::new(unsafe { &mut *core::ptr::addr_of_mut!(FB_DATA) });
@@ -372,8 +378,54 @@ fn main() -> ! {
     selftest::run(&mut radio);
 
     loop {
-        // ---- keyboard ----
-        while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+        // ---- keyboard (with hold-to-repeat) ----
+        loop {
+            let ev = match tca8418::next_event(&mut i2c) {
+                Ok(Some(e)) => {
+                    // Track the held key for auto-repeat. Shift/ENTER/home never
+                    // repeat (that would spam case-toggles / launches / menu jumps).
+                    let rc = (e.row, e.col);
+                    let repeatable =
+                        rc != crate::hal::keymap::K_SHIFT && rc != K_ENTER && rc != K_HOME;
+                    if e.pressed && repeatable {
+                        kbd_held = Some(rc);
+                        kbd_held_since = Instant::now();
+                        kbd_last_repeat = Instant::now();
+                        #[cfg(feature = "keylog")]
+                        esp_println::println!("EV down r{} c{} -> SET", e.row, e.col);
+                    } else if !e.pressed && kbd_held == Some(rc) {
+                        kbd_held = None; // release stops the repeat immediately
+                        #[cfg(feature = "keylog")]
+                        esp_println::println!("EV up   r{} c{} -> CLEAR", e.row, e.col);
+                    } else {
+                        #[cfg(feature = "keylog")]
+                        esp_println::println!(
+                            "EV {} r{} c{} -> noop (held={:?})",
+                            if e.pressed { "down" } else { "up  " },
+                            e.row,
+                            e.col,
+                            kbd_held
+                        );
+                    }
+                    e
+                }
+                // No hardware event pending: synthesize a repeat for the held key
+                // once past the initial delay and due. The held key is cleared by
+                // its release event (reliable now that the decode is correct), so
+                // no time cap is needed.
+                _ => match kbd_held {
+                    Some((r, c))
+                        if kbd_held_since.elapsed() >= Duration::from_millis(280)
+                            && kbd_last_repeat.elapsed() >= Duration::from_millis(120) =>
+                    {
+                        kbd_last_repeat = Instant::now();
+                        #[cfg(feature = "keylog")]
+                        esp_println::println!("REPEAT r{} c{}", r, c);
+                        tca8418::KeyEvent { pressed: true, row: r, col: c }
+                    }
+                    _ => break,
+                },
+            };
             // The "Aa" key is a caps toggle (the keyboard has no hardware caps-lock):
             // tap to flip case for whichever screen is taking text input. It types
             // nothing itself; we act on the press edge and ignore the release.
@@ -426,6 +478,12 @@ fn main() -> ! {
                     Screen::Menu => {}
                     Screen::Hacking => {
                         if !hacking.back(&mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                    }
+                    Screen::Games => {
+                        if !games.back(&mut fbuf) {
                             screen = Screen::Menu;
                             menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                         }
@@ -485,10 +543,10 @@ fn main() -> ! {
                             synth.silence();
                             repl.enter(&mut fbuf);
                         }
-                        menu::AppKind::Snake => {
-                            screen = Screen::Snake;
+                        menu::AppKind::Games => {
+                            screen = Screen::Games;
                             synth.silence();
-                            snake.enter(&mut fbuf);
+                            games.enter(&mut fbuf);
                         }
                         menu::AppKind::Stopwatch => {
                             screen = Screen::Stopwatch;
@@ -525,7 +583,7 @@ fn main() -> ! {
                     }
                 },
                 Screen::Repl => repl.on_key(rc, &mut fbuf),
-                Screen::Snake => snake.on_key(rc, &mut fbuf),
+                Screen::Games => games.on_key(rc, &mut fbuf),
                 Screen::Stopwatch => stopwatch.on_key(rc, &mut fbuf),
                 Screen::Sysinfo => sysinfo.on_key(rc, &mut fbuf),
                 Screen::Notes => notes.on_key(rc, &vm, &mut fbuf),
@@ -807,6 +865,14 @@ fn main() -> ! {
                         }
                         dirty = true;
                     }
+                    Screen::Games => {
+                        // G0 = leave the game back to the games list; pop to the menu at the top
+                        if !games.back(&mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                        dirty = true;
+                    }
                     _ => {
                         screen = Screen::Menu;
                         menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
@@ -874,7 +940,7 @@ fn main() -> ! {
                         dirty = true;
                     }
                 }
-                Screen::Snake => dirty |= snake.tick(&mut fbuf),
+                Screen::Games => dirty |= games.tick(&mut fbuf),
                 Screen::Stopwatch => dirty |= stopwatch.tick(&mut fbuf),
                 Screen::Sysinfo => dirty |= sysinfo.tick(&mut fbuf),
                 _ => {}

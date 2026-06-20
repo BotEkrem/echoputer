@@ -13,6 +13,9 @@ path = "src/main.rs"
 # USB-serial radio self-test: at boot, drive every Hacking tool and print results
 # over serial (no keypresses needed), then fall through to the normal menu.
 selftest = []
+# Diagnostic: print every raw keyboard event (down/up + row/col) over serial, to
+# see whether the TCA8418 reports key releases. Used to design hold-to-repeat.
+keylog = []
 
 [dependencies]
 # Core HAL. `unstable` is required for the I2S driver (audio) and a few helpers.

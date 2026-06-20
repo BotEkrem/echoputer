@@ -4,9 +4,12 @@
 
 pub mod browser;
 pub mod charge;
+pub mod g2048;
+pub mod games;
 pub mod hacking;
 pub mod menu;
 pub mod notes;
+pub mod pong;
 pub mod repl;
 pub mod scales;
 pub mod settings;
@@ -15,5 +18,6 @@ pub mod splash;
 pub mod stopwatch;
 pub mod synth;
 pub mod sysinfo;
+pub mod tetris;
 pub mod ui;
 pub mod wiki;

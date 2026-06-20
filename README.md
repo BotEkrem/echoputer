@@ -27,9 +27,10 @@ Hacking is the security toolkit and has its own section below. The rest:
   `len` and `range`. Blocks are indented and run on a blank line, and `help`
   lists the syntax. A step budget and a recursion cap keep a bad script from
   hanging or crashing the device.
-- Snake is the classic game on a grid below the top bar. The arrow cluster
-  steers, food grows the snake and bumps the score, and it speeds up as you go;
-  hitting a wall or yourself ends the run and any key starts a fresh one.
+- Games is a small arcade launcher: Snake, 2048, Tetris and Pong. Pick one from
+  the list and play; G0/Backspace steps back to the list, then to the home menu.
+  They share one keyboard interface, so the arrow cluster steers/moves and ENTER
+  acts (serve, hard-drop) where it applies.
 - Synthwave turns the keyboard into a small wavetable synth. Notes are quantised
   to a scale, with pitch rising left to right and bottom to top, so mashing keys
   still comes out musical. G0 cycles the scale and the LED pulses with the audio.
@@ -164,8 +165,8 @@ src/
     netscan       the LAN scanner
 
   apps/         the home screen and the apps
-    menu, splash, repl, snake, stopwatch, notes, sysinfo, synth, scales, ui,
-    browser, charge, settings, hacking, wiki
+    menu, splash, repl, games (snake, g2048, tetris, pong), stopwatch, notes,
+    sysinfo, synth, scales, ui, browser, charge, settings, hacking, wiki
 ```
 
 ## Hardware

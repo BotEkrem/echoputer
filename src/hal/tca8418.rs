@@ -90,8 +90,10 @@ pub fn next_event<I: I2c>(i2c: &mut I) -> Result<Option<KeyEvent>, I::Error> {
         return Ok(None);
     }
 
-    // bit7 set => release; codes 1..80 => key = row*10 + col + 1
-    let pressed = (ev & 0x80) == 0;
+    // Per the TCA8418 datasheet, the key-event MSB is the make/break flag:
+    // bit7 = 1 => key PRESS, bit7 = 0 => key RELEASE. (This was inverted before,
+    // which made actions fire on finger-lift and broke hold-to-repeat.)
+    let pressed = (ev & 0x80) != 0;
     let n = (ev & 0x7F).wrapping_sub(1);
     let hw_row = n / 10; // 0..6
     let hw_col = n % 10; // 0..9 (only 0..7 are matrix columns)

@@ -16,7 +16,7 @@ pub enum AppKind {
     Hacking,
     Repl,
     Synth,
-    Snake,
+    Games,
     Browser,
     Stopwatch,
     Notes,
@@ -35,7 +35,7 @@ pub const APPS: [App; 10] = [
     App { kind: AppKind::Hacking },
     App { kind: AppKind::Repl },
     App { kind: AppKind::Synth },
-    App { kind: AppKind::Snake },
+    App { kind: AppKind::Games },
     App { kind: AppKind::Browser },
     App { kind: AppKind::Stopwatch },
     App { kind: AppKind::Notes },
@@ -51,7 +51,7 @@ fn app_name(k: AppKind) -> &'static str {
         AppKind::Hacking => "Hacking",
         AppKind::Repl => "REPL",
         AppKind::Synth => "Synthwave",
-        AppKind::Snake => "Snake",
+        AppKind::Games => i18n::t("Games", "Oyunlar"),
         AppKind::Browser => i18n::t("File Browser", "Dosya Tarayici"),
         AppKind::Stopwatch => i18n::t("Stopwatch", "Kronometre"),
         AppKind::Notes => i18n::t("Notes", "Notlar"),
@@ -66,7 +66,7 @@ fn app_sub(k: AppKind) -> &'static str {
         AppKind::Hacking => i18n::t("WiFi/BLE recon + attacks", "WiFi/BLE kesif + saldiri"),
         AppKind::Repl => i18n::t("interactive scripting shell", "etkilesimli betik kabugu"),
         AppKind::Synth => i18n::t("melodic keyboard synth", "melodik klavye synth"),
-        AppKind::Snake => i18n::t("classic snake game", "klasik yilan oyunu"),
+        AppKind::Games => i18n::t("Snake, 2048, Tetris, Pong", "Snake, 2048, Tetris, Pong"),
         AppKind::Browser => i18n::t("browse + manage SD", "SD gez + yonet"),
         AppKind::Stopwatch => i18n::t("stopwatch + timer", "kronometre + zamanlayici"),
         AppKind::Notes => i18n::t("text notes on SD", "SD'de metin notlari"),
@@ -133,12 +133,20 @@ fn draw_icon(d: &mut impl DrawTarget<Color = Rgb565>, kind: AppKind, x: i32, y: 
             let _ = Line::new(Point::new(x - 1, y + 8), Point::new(x + 4, y + 8)).into_styled(st).draw(d);
             let _ = Line::new(Point::new(x + 13, y + 8), Point::new(x + 17, y + 8)).into_styled(st).draw(d);
         }
-        AppKind::Snake => {
-            // a short chain of body segments curling to a head
-            let seg = [(0, 12), (5, 12), (5, 7), (10, 7), (10, 12), (15, 12)];
-            for &(sx, sy) in seg.iter() {
-                let _ = Rectangle::new(Point::new(x + sx, y + sy), Size::new(4, 4)).into_styled(fl).draw(d);
-            }
+        AppKind::Games => {
+            // a gamepad: rounded body, a D-pad cross (left) and two buttons (right)
+            let _ = RoundedRectangle::with_equal_corners(
+                Rectangle::new(Point::new(x, y + 4), Size::new(18, 11)),
+                Size::new(3, 3),
+            )
+            .into_styled(st)
+            .draw(d);
+            // D-pad cross
+            let _ = Rectangle::new(Point::new(x + 4, y + 9), Size::new(5, 1)).into_styled(fl).draw(d);
+            let _ = Rectangle::new(Point::new(x + 6, y + 7), Size::new(1, 5)).into_styled(fl).draw(d);
+            // two buttons
+            let _ = Circle::new(Point::new(x + 12, y + 7), 2).into_styled(fl).draw(d);
+            let _ = Circle::new(Point::new(x + 14, y + 10), 2).into_styled(fl).draw(d);
         }
         AppKind::Stopwatch => {
             // stopwatch: top button + body circle + a hand
