@@ -30,7 +30,26 @@ Hacking is the security toolkit and has its own section below. The rest:
 - Games is a small arcade launcher: Snake, 2048, Tetris and Pong. Pick one from
   the list and play; G0/Backspace steps back to the list, then to the home menu.
   They share one keyboard interface, so the arrow cluster steers/moves and ENTER
-  acts (serve, hard-drop) where it applies.
+  acts (serve, hard-drop) where it applies. Built with `--features emu` (or
+  `emugbc` for colour) it gains a fifth entry, **Game Boy**: an emulator over a
+  vendored C core (Peanut-GB for DMG, Walnut-CGB for Game Boy Color). It lists the
+  `.gb`/`.gbc` ROMs you drop in `/ECHO/ROMS/` and runs the selected one straight
+  from the card — the ROM stays on the SD, read on demand through a 512-byte
+  sector cache (the SD bus is re-clocked to 20 MHz so that isn't a crawl), scaled
+  to the full panel, with sound through the codec (G0 cycles the volume in-game).
+  The cartridge battery save is mirrored to a `.sav` next to the ROM, flushed
+  periodically and on exit, so progress survives a power-cut. Controls: the arrow
+  cluster is the D-pad, `l`/`k` are A/B, ENTER is Start, Space is Select; `` ` ``
+  or Backspace leaves the game (saving first).
+- Web UI puts the device on your WiFi and serves a dashboard you open from a PC.
+  It scans for networks, you pick one and type the password (networks you've
+  joined are remembered, so the password comes pre-filled next time), and once
+  connected the screen shows the dashboard's IP. From a browser on the same
+  network you get live system stats and full management of the SD card: browse,
+  download, upload (including drag-and-drop), delete files and make folders. It's
+  a hand-rolled HTTP server over smoltcp on the station interface — no SoftAP — and
+  long filenames are preserved in the dashboard through a sidecar index even
+  though the card itself stays 8.3.
 - Synthwave turns the keyboard into a small wavetable synth. Notes are quantised
   to a scale, with pitch rising left to right and bottom to top, so mashing keys
   still comes out musical. G0 cycles the scale and the LED pulses with the audio.
@@ -108,8 +127,9 @@ IMSI catcher, which would need a cellular radio the chip simply doesn't have.
 Up and down move, ENTER selects, and left/right change a value where that makes
 sense. Backspace steps back one level; the backtick key in the top-left corner
 jumps straight to the home screen. The G0 button also steps back, except in
-Synthwave where it cycles the scale and on the charge screen where it blanks the
-display. The top bar shows battery percent and a fill icon on the right.
+Synthwave where it cycles the scale, in the Game Boy emulator where it cycles the
+volume, and on the charge screen where it blanks the display. The top bar shows
+battery percent and a fill icon on the right.
 
 ## Building and flashing
 
@@ -141,6 +161,13 @@ espflash flash --port /dev/cu.usbmodem* --baud 921600 --monitor \
   target/xtensa-esp32s3-none-elf/release/echoputer
 ```
 
+The Game Boy emulator is off by default (it needs the vendored C cores in
+`vendor/` and the Xtensa GCC `espup` already installs). Add `--features emu` for
+the monochrome (DMG) build, or `--features emugbc` for Game Boy Color — note that
+the colour core's larger RAM use crowds out the radio, so the Web UI / Hacking
+tools are only reliable on the DMG (or plain) build. `--features emutest` runs an
+on-device self-test of the emulator core over serial at boot.
+
 ## How it fits together
 
 The source is split into layers: drivers at the bottom, a radio subsystem, and the
@@ -157,16 +184,19 @@ src/
   hal/          board drivers, the framebuffer and the keymap
     fb, battery, es8311, tca8418, ws2812, keymap
 
-  radio/        the WiFi/BLE stack the Hacking app drives
+  radio/        the WiFi/BLE stack the Hacking and Web UI apps drive
     mod.rs        Radio, the sole owner of the WiFi+BLE peripherals
     wifi_frames   raw 802.11 frame builders
     ble_spam      BLE advertising payloads
     portal        the evil/captive portal (smoltcp + DHCP/DNS/HTTP)
     netscan       the LAN scanner
+    webui         the Web UI station dashboard (smoltcp HTTP + SD file mgmt)
 
   apps/         the home screen and the apps
     menu, splash, repl, games (snake, g2048, tetris, pong), stopwatch, notes,
-    sysinfo, synth, scales, ui, browser, charge, settings, hacking, wiki
+    sysinfo, synth, scales, ui, browser, webui, charge, settings, hacking, wiki
+    emu/          the Game Boy emulator (mod, ffi, rom, input, video), behind
+                  --features emu; the vendored C cores live in vendor/
 ```
 
 ## Hardware
@@ -184,8 +214,9 @@ src/
 ## Notes
 
 - Long file names are shown, but files open by their short 8.3 name underneath.
-- The SD bus runs at a fixed 400 kHz, which initialises reliably across cards but
-  isn't tuned for throughput. Fine for browsing and previews.
+- The SD bus initialises at 400 kHz (the SD spec needs the handshake slow) and is
+  then re-clocked to 20 MHz, so file transfers (Web UI uploads) and emulator ROM
+  reads aren't crippled by the slow init clock.
 - The radio tools only mean anything against real hardware, so their on-device
   behaviour (injection, capture, the portal's credential grab) is checked on the
   board rather than in a host test.
@@ -215,6 +246,9 @@ MIT, see [LICENSE](LICENSE).
 - [Evil-M5Project](https://github.com/7h30th3r0n3/Evil-M5Project) by 7h30th3r0n3
 - [Launcher](https://github.com/bmorcelli/Launcher) by bmorcelli
 - [AdvanceOS-for-cardputer](https://github.com/bomberman30/AdvanceOS-for-cardputer) by bomberman30
+- [Peanut-GB](https://github.com/deltabeard/Peanut-GB) by deltabeard — the Game Boy
+  (DMG) core and its companion `minigb_apu` sound emulator that the Game Boy app
+  embeds; the colour (`emugbc`) build uses a Game Boy Color fork of it
 
 Built on the [esp-rs](https://github.com/esp-rs) ecosystem; the docs and crate
 sources that came in most useful:
