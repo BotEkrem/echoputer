@@ -31,6 +31,7 @@ mod selftest;
 // Everything else is reached by full path: crate::radio::Radio, crate::theme, etc.
 use crate::apps::{
     browser, charge, games, hacking, menu, notes, repl, scales, settings, splash, stopwatch, synth, sysinfo, ui,
+    webui,
 };
 use crate::hal::{battery, es8311, fb, tca8418, ws2812};
 use crate::radio::portal;
@@ -100,10 +101,13 @@ enum Screen {
     Menu,
     Repl,
     Games,
+    #[cfg(feature = "emu")]
+    Emu,
     Stopwatch,
     Sysinfo,
     Notes,
     Synth,
+    WebUi,
     Browser,
     Settings,
     Charge,
@@ -155,6 +159,23 @@ fn clamp_scroll(sel: usize, scroll: usize, visible: usize) -> usize {
 #[main]
 fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+
+    // Diagnostic: probe external PSRAM and report its size, then continue. Psram::new
+    // safely returns a 0-byte range if no chip is present (no hang). Decides the
+    // emulator's ROM-storage strategy (PSRAM-resident vs flash partition).
+    #[cfg(feature = "psramprobe")]
+    {
+        let psram =
+            esp_hal::psram::Psram::new(peripherals.PSRAM, esp_hal::psram::PsramConfig::default());
+        let (addr, size) = psram.raw_parts();
+        esp_println::println!(
+            "\n>>> PSRAM PROBE: {} bytes ({} KB / {} MB) @ {:p} <<<\n",
+            size,
+            size / 1024,
+            size / (1024 * 1024),
+            addr
+        );
+    }
 
     // Heap for the esp-radio (WiFi/BLE) stack used by the Hacking menu. This only
     // reserves static RAM; nothing allocates until the radio is initialised, so it is
@@ -247,6 +268,21 @@ fn main() -> ! {
     let sdcard = SdCard::new(sd_dev, Delay::new());
     let vm = VolumeManager::new(sdcard, browser::DummyTimeSource);
 
+    // The SD bus MUST initialise at <=400 kHz, but that clock cripples everything
+    // after (emulator bank reads were ~0.3 s each -> games crawl; uploads ~50 KB/s).
+    // Force the card to acquire at 400 kHz, then re-clock SPI3 up to 20 MHz for all
+    // subsequent transfers (the card supports 25 MHz in SPI mode; the display bus
+    // already runs at 40 MHz, so the board handles it).
+    let _ = vm.device(|sd| {
+        let _ = sd.num_bytes(); // force the card to acquire (init) at 400 kHz
+        sd.spi(|dev| {
+            let _ = dev.bus_mut().apply_config(
+                &SpiConfig::default().with_frequency(Rate::from_mhz(20)).with_mode(Mode::_0),
+            );
+        });
+        browser::DummyTimeSource // VolumeManager::device requires the closure to return T
+    });
+
     let mut config = settings::Config::new();
     config.load(&vm); // best-effort: no card / no file -> defaults
     config.apply_lang(); // set UI language before the first frame is drawn
@@ -264,6 +300,31 @@ fn main() -> ! {
         battery::set(battery::mv_to_percent(mv as u16), present);
     }
 
+    // ---------------- Onboard WS2812 LED (GPIO21) ----------------
+    // Set up + clear the LED BEFORE the splash: the WS2812 powers on to a stray
+    // (often white) pixel, and if we only drove it from the main loop it would glow
+    // through boot/splash even when the LED is meant to be off at low brightness.
+    let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
+    let mut led = rmt
+        .channel0
+        // Actively drive GPIO21 LOW between frames (idle_output). The WS2812 wants
+        // its data line resting low; the default leaves it released, which on the
+        // Cardputer's shared LED/backlight rail invites spurious re-latching (flicker).
+        .configure_tx(
+            &TxChannelConfig::default()
+                .with_clk_divider(1)
+                .with_idle_output(true)
+                .with_idle_output_level(Level::Low),
+        )
+        .unwrap()
+        .with_pin(peripherals.GPIO21);
+    // Clear the power-on pixel now; the main loop then drives it per the brightness
+    // setting (accent wave only at full brightness, off otherwise).
+    led = match led.transmit(&ws2812::encode(0, 0, 0)) {
+        Ok(tx) => tx.wait().unwrap_or_else(|(_, c)| c),
+        Err((_, c)) => c,
+    };
+
     // ---------------- Boot intro (skippable in Settings) ----------------
     if config.intro_on {
         splash::run(&mut display, &mut delay);
@@ -274,8 +335,11 @@ fn main() -> ! {
     let mut browser = browser::Browser::new();
     let mut settings_ui = settings::Settings::new();
     let mut hacking = hacking::Hacking::new();
+    let mut webui = webui::WebUi::new();
     let mut repl = repl::Repl::new();
     let mut games = games::Games::new();
+    #[cfg(feature = "emu")]
+    let mut emu = apps::emu::Emu::new();
     let mut stopwatch = stopwatch::Stopwatch::new();
     let mut sysinfo = sysinfo::Sysinfo::new();
     let mut notes = notes::Notes::new();
@@ -296,6 +360,16 @@ fn main() -> ! {
     let kbd_ok = tca8418::init(&mut i2c).is_ok();
 
     // ---------------- I2S audio out ----------------
+    // The GBC build (Walnut-CGB) needs the RAM the larger colour core eats, so it
+    // trims this DMA ring (still ~0.13 s at 16 kHz, refilled every loop). The
+    // DMG/default builds keep the roomier 0.5 s buffer.
+    // GBC build: the circular-DMA macro lays out the right descriptor count for
+    // write_dma_circular even with a small 4 KB ring, reclaiming RAM for the
+    // larger colour core. The DMG/default build keeps its roomier 32 KB buffer
+    // (plain dma_buffers! happens to give enough descriptors at that size).
+    #[cfg(feature = "emugbc")]
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 4096);
+    #[cfg(not(feature = "emugbc"))]
     let (_, _, tx_buffer, tx_descriptors) = dma_buffers!(0, 32000);
     let i2s = I2s::new(
         peripherals.I2S0,
@@ -314,21 +388,9 @@ fn main() -> ! {
         .build(tx_descriptors);
     let mut transfer = i2s_tx.write_dma_circular(tx_buffer).unwrap();
 
-    // ---------------- Onboard WS2812 LED (GPIO21) ----------------
-    let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
-    let mut led = rmt
-        .channel0
-        // Actively drive GPIO21 LOW between frames (idle_output). The WS2812 wants
-        // its data line resting low; the default leaves it released, which on the
-        // Cardputer's shared LED/backlight rail invites spurious re-latching (flicker).
-        .configure_tx(
-            &TxChannelConfig::default()
-                .with_clk_divider(1)
-                .with_idle_output(true)
-                .with_idle_output_level(Level::Low),
-        )
-        .unwrap()
-        .with_pin(peripherals.GPIO21);
+    // (WS2812 LED is initialised + cleared before the splash, above, so its
+    // power-on pixel doesn't glow white through boot when the LED is meant to be
+    // off — it must not be re-initialised here.)
     let mut led_phase = 0.0f32;
     let mut led_was_dark = false; // true once we've sent the off-frame for a dark LED
 
@@ -349,6 +411,11 @@ fn main() -> ! {
 
     // off-screen framebuffer; UI renders here, then one blit per frame -> no flash
     let mut fbuf = fb::FrameBuf::new(unsafe { &mut *core::ptr::addr_of_mut!(FB_DATA) });
+
+    // Emulator boot self-test: exercise the GB core on-device over serial, then
+    // continue to the normal menu. Off unless built with `--features emutest`.
+    #[cfg(feature = "emutest")]
+    apps::emu::selftest(&vm, &mut fbuf);
 
     let mut screen = Screen::Menu;
     let mut menu_sel: usize = 0;
@@ -435,6 +502,7 @@ fn main() -> ! {
                         Screen::Repl => repl.toggle_caps(&mut fbuf),
                         Screen::Hacking => hacking.toggle_caps(&mut fbuf),
                         Screen::Notes => notes.toggle_caps(&mut fbuf),
+                        Screen::WebUi => webui.toggle_caps(&mut fbuf),
                         _ => {}
                     }
                     last_input = Instant::now();
@@ -442,6 +510,37 @@ fn main() -> ! {
                 }
                 continue;
             }
+            // The emulator wants press AND release (held buttons), unlike the
+            // one-shot apps, so handle it before the press-only path below. The
+            // back/home keys leave the game (saving cart RAM first).
+            #[cfg(feature = "emu")]
+            if screen == Screen::Emu {
+                let rc = (ev.row, ev.col);
+                if ev.pressed && (rc == K_HOME || rc == K_BACKSPACE) {
+                    // back() saves+returns to the ROM list when playing (true); from
+                    // the list it returns false (nothing left to pop here).
+                    let in_list = !emu.back(&vm, &mut fbuf);
+                    if rc == K_HOME {
+                        // backtick always jumps to the home menu
+                        screen = Screen::Menu;
+                        menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                    } else if in_list {
+                        // backspace from the ROM list -> back up to the Games launcher
+                        screen = Screen::Games;
+                        games.enter(&mut fbuf);
+                    }
+                    last_input = Instant::now();
+                    dirty = true;
+                    continue;
+                }
+                emu.on_event((ev.row, ev.col), ev.pressed, &vm, &mut fbuf);
+                if ev.pressed {
+                    last_input = Instant::now();
+                    dirty = true;
+                }
+                continue;
+            }
+
             if !ev.pressed {
                 continue;
             }
@@ -472,10 +571,17 @@ fn main() -> ! {
             if rc == K_BACKSPACE
                 && !(screen == Screen::Hacking && hacking.is_editing())
                 && !(screen == Screen::Notes && notes.is_editing())
+                && !(screen == Screen::WebUi && webui.is_editing())
                 && screen != Screen::Repl
             {
                 match screen {
                     Screen::Menu => {}
+                    Screen::WebUi => {
+                        if !webui.back(&mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                    }
                     Screen::Hacking => {
                         if !hacking.back(&mut fbuf) {
                             screen = Screen::Menu;
@@ -516,6 +622,27 @@ fn main() -> ! {
                             screen = Screen::Synth;
                             ui::draw_static(&mut fbuf, mode, synth.volume());
                             status_dots(&mut fbuf, audio_ok, kbd_ok);
+                        }
+                        menu::AppKind::WebUi => {
+                            screen = Screen::WebUi;
+                            synth.silence();
+                            webui.enter(&mut fbuf); // "scanning WiFi..."
+                            let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                            webui.begin_scan();
+                            match radio.scan() {
+                                Some(aps) => {
+                                    for ap in &aps {
+                                        let secured = ap.auth != "open";
+                                        webui.push_ap(ap.ssid.as_bytes(), ap.rssi, ap.channel, ap.auth, secured);
+                                    }
+                                }
+                                None => webui.mark_scan_failed(),
+                            }
+                            webui.show_list(&mut fbuf);
+                            // load remembered networks so a known one's password
+                            // comes pre-filled when picked.
+                            webui.clear_known();
+                            radio::webui::load_creds(&vm, |ssid, pw| webui.add_known(ssid, pw));
                         }
                         menu::AppKind::Browser => {
                             screen = Screen::Browser;
@@ -583,7 +710,98 @@ fn main() -> ! {
                     }
                 },
                 Screen::Repl => repl.on_key(rc, &mut fbuf),
-                Screen::Games => games.on_key(rc, &mut fbuf),
+                Screen::Games => {
+                    // true == the user picked "Game Boy"; hand off to the emulator.
+                    if games.on_key(rc, &mut fbuf) {
+                        #[cfg(feature = "emu")]
+                        {
+                            screen = Screen::Emu;
+                            synth.silence();
+                            emu.enter(&vm, &mut fbuf);
+                        }
+                    }
+                }
+                // Emulator key events are handled earlier (it needs key releases too),
+                // so this arm is unreachable; it only satisfies the match.
+                #[cfg(feature = "emu")]
+                Screen::Emu => {}
+                Screen::WebUi => match webui.on_key(rc, &mut fbuf) {
+                    webui::Action::Connect => {
+                        // Copy ssid/pw into owned buffers so `webui` is free for the
+                        // tick repaint (the borrow checker won't let us hold a &str
+                        // into `webui` while the closure mutates it).
+                        let mut ssid_b = [0u8; 32];
+                        let s = webui.ssid().as_bytes();
+                        let sl = s.len().min(32);
+                        ssid_b[..sl].copy_from_slice(&s[..sl]);
+                        let mut pw_b = [0u8; 64];
+                        let p = webui.password().as_bytes();
+                        let pl = p.len().min(64);
+                        pw_b[..pl].copy_from_slice(&p[..pl]);
+                        let ssid = core::str::from_utf8(&ssid_b[..sl]).unwrap_or("");
+                        let pw = core::str::from_utf8(&pw_b[..pl]).unwrap_or("");
+
+                        let mac = esp_hal::efuse::base_mac_address();
+                        let mb = mac.as_bytes();
+                        let sys = radio::webui::SysSnapshot {
+                            heap_free: esp_alloc::HEAP.free(),
+                            heap_used: esp_alloc::HEAP.used(),
+                            heap_total: esp_alloc::HEAP.stats().size,
+                            uptime_s: sysinfo.uptime_s(),
+                            batt_pct: if battery::present() { battery::level() as i32 } else { -1 },
+                            mac: [mb[0], mb[1], mb[2], mb[3], mb[4], mb[5]],
+                        };
+
+                        webui.draw_status(&mut fbuf, webui::Phase::Connecting);
+                        let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                        let mut last = Instant::now();
+                        let res = radio.run_webui(ssid, pw, &vm, &sys, |st| {
+                            let mut stop = false;
+                            while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                if ev.pressed {
+                                    stop = true;
+                                }
+                            }
+                            if g0.is_low() {
+                                stop = true;
+                            }
+                            if stop {
+                                return false;
+                            }
+                            if last.elapsed() >= Duration::from_millis(180) {
+                                last = Instant::now();
+                                let phase = match st.phase {
+                                    radio::webui::Phase::Serving => {
+                                        webui::Phase::Serving { ip: st.ip, hits: st.hits }
+                                    }
+                                    _ => webui::Phase::Connecting,
+                                };
+                                webui.draw_status(&mut fbuf, phase);
+                                let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                            }
+                            true
+                        });
+                        g0_prev_low = g0.is_low();
+                        if res.is_some() {
+                            // association succeeded -> the password is good, remember it
+                            radio::webui::save_cred(&vm, ssid, pw);
+                        }
+                        match res {
+                            Some(st) if matches!(st.phase, radio::webui::Phase::Serving) => {
+                                // user stopped the dashboard -> home menu
+                                screen = Screen::Menu;
+                                menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                            }
+                            _ => {
+                                webui.draw_status(
+                                    &mut fbuf,
+                                    webui::Phase::Failed(i18n::t("connect failed", "baglanti yok")),
+                                );
+                            }
+                        }
+                    }
+                    webui::Action::Redraw | webui::Action::None => {}
+                },
                 Screen::Stopwatch => stopwatch.on_key(rc, &mut fbuf),
                 Screen::Sysinfo => sysinfo.on_key(rc, &mut fbuf),
                 Screen::Notes => notes.on_key(rc, &vm, &mut fbuf),
@@ -873,6 +1091,26 @@ fn main() -> ! {
                         }
                         dirty = true;
                     }
+                    Screen::WebUi => {
+                        // G0 = password field -> list; list/status -> home menu
+                        if !webui.back(&mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                        dirty = true;
+                    }
+                    #[cfg(feature = "emu")]
+                    Screen::Emu => {
+                        if emu.is_playing() {
+                            // G0 while playing cycles the volume (exit via ` / Backspace).
+                            emu.bump_volume(&mut fbuf);
+                        } else if !emu.back(&vm, &mut fbuf) {
+                            // from the ROM library, back up to the Games launcher.
+                            screen = Screen::Games;
+                            games.enter(&mut fbuf);
+                        }
+                        dirty = true;
+                    }
                     _ => {
                         screen = Screen::Menu;
                         menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
@@ -883,9 +1121,29 @@ fn main() -> ! {
         }
         g0_prev_low = low;
 
+        // ---- emulator: run a Game Boy frame every iteration while playing ----
+        // The core does ~92 fps unthrottled, so pace it by the work itself (one
+        // frame + one blit per loop) rather than the 40 ms UI tick (which would
+        // cap it to 25 fps). Audio is silenced on entry, so a slower loop here is
+        // fine.
+        #[cfg(feature = "emu")]
+        if screen == Screen::Emu {
+            dirty |= emu.tick(&vm, &mut fbuf);
+        }
+
         // ---- audio: keep the DMA buffer topped up (robust against slow frames) ----
         while transfer.available().unwrap_or(0) >= chunk_bytes {
-            synth.fill_stereo(&mut samples);
+            // While a Game Boy game is playing, feed the I2S from its APU instead
+            // of the synth (the synth is silenced on entry).
+            let mut filled = false;
+            #[cfg(feature = "emu")]
+            if screen == Screen::Emu {
+                apps::emu::audio_fill(&mut samples);
+                filled = true;
+            }
+            if !filled {
+                synth.fill_stereo(&mut samples);
+            }
             // ESP32-S3 is little-endian, so the i16 sample buffer already has the
             // exact byte layout the I2S DMA wants — reinterpret it as bytes instead
             // of repacking element by element (this runs in the tight audio feed).
@@ -964,6 +1222,8 @@ fn main() -> ! {
                             dirty = true;
                         }
                         Screen::Browser => {}
+                        #[cfg(feature = "emu")]
+                        Screen::Emu => {} // don't paint the battery over the game frame
                         _ => {
                             theme::draw_battery(&mut fbuf, theme::W - theme::PAD, 3);
                             dirty = true;

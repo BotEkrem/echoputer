@@ -1,0 +1,108 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Echoputer</title><style>
+:root{--fg:#e8e8e8;--bg:#0b0b0b;--mut:#8a8a8a;--ln:#262626;--hov:#161616;--bar:#e8e8e8}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--fg);background:var(--bg)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+header{border-bottom:1px solid var(--fg);padding:18px 22px;display:flex;align-items:baseline;justify-content:space-between}
+header h1{font-size:17px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:0}
+header .st{font-size:12px;color:var(--mut);letter-spacing:.05em}
+main{max-width:880px;margin:0 auto;padding:22px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--ln);border:1px solid var(--ln);margin-bottom:26px}
+.stat{background:var(--bg);padding:12px 14px}
+.stat .k{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut)}
+.stat .v{font-size:16px;margin-top:3px}
+.bar{height:3px;background:var(--ln);margin-top:8px}.bar i{display:block;height:100%;background:var(--bar)}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.path{font-size:13px;color:var(--mut);margin-right:auto}.path b{color:var(--fg)}
+input[type=text]{font:13px inherit;border:1px solid var(--ln);background:var(--bg);color:var(--fg);padding:7px 9px;border-radius:0;outline:none}
+input[type=text]:focus{border-color:var(--fg)}
+button{font:13px inherit;border:1px solid var(--fg);background:var(--bg);color:var(--fg);padding:7px 13px;cursor:pointer;border-radius:0}
+button:hover{background:var(--fg);color:var(--bg)}
+label.file{border:1px solid var(--ln);padding:7px 11px;cursor:pointer;color:var(--mut)}label.file:hover{border-color:var(--fg);color:var(--fg)}
+label.file input{display:none}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);font-weight:600;padding:0 12px 8px;border-bottom:1px solid var(--fg)}
+td{padding:9px 12px;border-bottom:1px solid var(--ln)}
+tr:hover td{background:var(--hov)}
+.t{width:34px;color:var(--mut)}.t b{color:var(--fg)}
+.sz{text-align:right;width:110px;color:var(--mut);white-space:nowrap}
+.ac{text-align:right;width:80px}
+a{color:var(--fg);text-decoration:none;cursor:pointer;border-bottom:1px solid transparent}
+a:hover{border-bottom-color:var(--fg)}
+.del{font-size:11px;letter-spacing:.06em;padding:4px 9px}
+#msg{margin-top:16px;font-size:12px;color:var(--mut);min-height:16px;letter-spacing:.03em}
+.empty{color:var(--mut);font-style:italic}
+.drop{border:1px dashed var(--ln);padding:14px;text-align:center;color:var(--mut);font-size:12px;letter-spacing:.05em;margin:14px 0;cursor:pointer}
+.drop:hover{border-color:var(--fg);color:var(--fg)}
+body.drag::after{content:"Drop to upload here";position:fixed;inset:0;background:rgba(11,11,11,.94);border:3px dashed var(--fg);
+display:flex;align-items:center;justify-content:center;font-size:22px;letter-spacing:.1em;color:var(--fg);z-index:99}
+</style></head><body>
+<header><h1>Echoputer</h1><span class=st id=hdr>connecting</span></header>
+<main>
+<div class=stats id=stats></div>
+<div class=toolbar>
+<span class=path id=crumb></span>
+<input type=text id=mkname placeholder="new folder" size=12>
+<button onclick=mkdir()>Create</button>
+<label class=file>Choose file<input type=file id=up onchange=upname()></label>
+<button onclick=upload()>Upload</button>
+<button onclick=load()>Refresh</button>
+</div>
+<table><thead><tr><th class=t></th><th>Name</th><th class=sz>Size</th><th class=ac></th></tr></thead>
+<tbody id=ls></tbody></table>
+<div id=drop class=drop onclick="document.getElementById('up').click()">Drop a file here (or click) to upload to this folder</div>
+<div id=msg></div>
+</main>
+<script>
+let path="";
+// One TCP socket on the device, close-after-response: a request fired right after
+// a change (delete/mkdir/upload) can hit the socket mid-close and get refused.
+// Retry a few times with a short delay so the listing never spuriously fails.
+async function getJSON(u){let b=u+(u.includes("?")?"&":"?")+"_="+Date.now();for(let i=0;i<6;i++){try{let r=await fetch(b,{cache:"no-store"});if(r.ok)return await r.json()}catch(e){}await new Promise(s=>setTimeout(s,180))}throw 0}
+async function post(u){for(let i=0;i<6;i++){try{let r=await fetch(u,{method:"POST"});if(r.ok)return true}catch(e){}await new Promise(s=>setTimeout(s,180))}return false}
+function fmt(n){if(n<1024)return n+" B";if(n<1048576)return (n/1024).toFixed(1)+" KB";return (n/1048576).toFixed(2)+" MB"}
+function msg(t){document.getElementById("msg").textContent=t||""}
+function upname(){let f=document.getElementById("up").files[0];msg(f?"selected: "+f.name:"")}
+function up(){let p=path.split("/").filter(x=>x);p.pop();path=p.join("/");load()}
+function enter(n){path=(path?path+"/":"")+n;load()}
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
+async function sys(){try{let s=await getJSON("/api/sys");
+document.getElementById("hdr").textContent=s.chip+" · connected";
+let pct=s.heap_total?Math.round(100*s.heap_used/s.heap_total):0;
+document.getElementById("stats").innerHTML=
+card("Heap","<span class=mono>"+fmt(s.heap_used)+" / "+fmt(s.heap_total)+"</span><div class=bar><i style=width:"+pct+"%></i></div>")+
+card("Uptime","<span class=mono>"+hms(s.uptime)+"</span>")+
+card("Battery","<span class=mono>"+(s.batt<0?"USB":s.batt+"%")+"</span>")+
+card("MAC","<span class=mono>"+s.mac+"</span>")+
+card("Chip","<span class=mono>"+s.chip+"</span>");
+}catch(e){}}
+function card(k,v){return "<div class=stat><div class=k>"+k+"</div><div class=v>"+v+"</div></div>"}
+function hms(t){let h=t/3600|0,m=t%3600/60|0,s=t%60;return String(h).padStart(2,"0")+":"+String(m).padStart(2,"0")+":"+String(s).padStart(2,"0")}
+async function load(){let r;try{r=await getJSON("/fs?path="+encodeURIComponent(path))}catch(e){msg("listing failed");return}
+document.getElementById("crumb").innerHTML="<b>Path</b> /"+esc(r.path||"");
+let h="";
+if(path)h+="<tr><td class=t><b>↑</b></td><td><a onclick=up()>.. (up one level)</a></td><td class=sz></td><td class=ac></td></tr>";
+for(const e of (r.entries||[])){let full=(path?path+"/":"")+e.name,nm=esc(e.long||e.name);
+if(e.dir)h+="<tr><td class=t><b>▸</b></td><td><a onclick='enter(\""+nm+"\")'>"+nm+"</a></td>"+
+"<td class=sz>—</td><td class=ac></td></tr>";
+else h+="<tr><td class=t>·</td><td><a href='/download?path="+encodeURIComponent(full)+"'>"+nm+"</a></td>"+
+"<td class=sz class=mono>"+fmt(e.size)+"</td><td class=ac><button class=del onclick='rm(\""+esc(full)+"\")'>Delete</button></td></tr>";}
+document.getElementById("ls").innerHTML=h||"<tr><td></td><td class=empty>empty folder</td><td></td><td></td></tr>";
+msg("");sys()}
+async function rm(p){if(!confirm("Delete "+p+" ?"))return;await post("/delete?path="+encodeURIComponent(p));load()}
+async function mkdir(){let n=document.getElementById("mkname").value.trim();if(!n)return;
+await post("/mkdir?path="+encodeURIComponent((path?path+"/":"")+n));document.getElementById("mkname").value="";load()}
+async function uploadFile(f){if(!f){msg("choose a file first");return}
+msg("uploading "+f.name+" …");
+try{await fetch("/upload?path="+encodeURIComponent(path),{method:"POST",headers:{"X-Filename":f.name},body:f});
+msg("uploaded "+f.name);document.getElementById("up").value="";load()}catch(e){msg("upload failed")}}
+function upload(){uploadFile(document.getElementById("up").files[0])}
+// drag-and-drop a file anywhere on the page to upload it to the current folder
+window.addEventListener("dragover",e=>{e.preventDefault();document.body.classList.add("drag")});
+window.addEventListener("dragleave",e=>{if(!e.relatedTarget)document.body.classList.remove("drag")});
+window.addEventListener("drop",e=>{e.preventDefault();document.body.classList.remove("drag");let f=e.dataTransfer.files[0];if(f)uploadFile(f)});
+load();
+setInterval(sys,10000);
+</script></body></html>

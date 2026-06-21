@@ -78,6 +78,11 @@ impl Sysinfo {
         }
     }
 
+    /// Seconds since boot (for the Web UI dashboard's system snapshot).
+    pub fn uptime_s(&self) -> u64 {
+        self.boot.elapsed().as_secs()
+    }
+
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         theme::clear(d);
         theme::topbar(d, i18n::t("System", "Sistem"));

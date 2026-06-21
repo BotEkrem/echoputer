@@ -24,6 +24,7 @@
 pub mod ble_spam;
 pub mod netscan;
 pub mod portal;
+pub mod webui;
 pub mod wifi_frames;
 
 use alloc::{string::String, vec::Vec};
@@ -551,6 +552,66 @@ impl Radio {
             return None;
         }
         let res = netscan::scan(sta, mac, tick);
+        self.deinit_wifi();
+        Some(res)
+    }
+
+    // ------------------------------ web ui -----------------------------
+
+    /// Join `ssid` (with `pw`, or open if `pw` is empty) as a station, then serve
+    /// the HTTP file/system dashboard on the leased IP until `tick` aborts. The STA
+    /// is torn down on exit. Returns `None` if association fails (wrong password /
+    /// weak signal surface as a timeout, not a hang).
+    pub fn run_webui<D, T>(
+        &mut self,
+        ssid: &str,
+        pw: &str,
+        vm: &embedded_sdmmc::VolumeManager<D, T>,
+        sys: &webui::SysSnapshot,
+        tick: impl FnMut(&webui::ServeState) -> bool,
+    ) -> Option<webui::ServeState>
+    where
+        D: embedded_sdmmc::BlockDevice,
+        T: embedded_sdmmc::TimeSource,
+    {
+        use embassy_futures::select::{select, Either};
+        use esp_radio::wifi::sta::StationConfig;
+        use esp_radio::wifi::{self, AuthenticationMethod, Config};
+        self.deinit_ble();
+        self.deinit_wifi();
+        let w = self
+            .wifi_periph
+            .take()
+            .unwrap_or_else(|| unsafe { esp_hal::peripherals::WIFI::steal() });
+        let (mut c, ifs) = match wifi::new(w, Default::default()) {
+            Ok(x) => x,
+            Err(_) => return None,
+        };
+        let cfg = if pw.is_empty() {
+            StationConfig::default().with_ssid(ssid).with_auth_method(AuthenticationMethod::None)
+        } else {
+            StationConfig::default().with_ssid(ssid).with_password(pw.into())
+        };
+        if c.set_config(&Config::Station(cfg)).is_err() {
+            return None;
+        }
+        let sta = ifs.station;
+        let mac = sta.mac_address();
+        // associate with a 15 s cap so a bad password / weak signal fails cleanly.
+        let associated = matches!(
+            embassy_futures::block_on(select(
+                c.connect_async(),
+                Deadline { start: Instant::now(), dur: Duration::from_secs(15) },
+            )),
+            Either::First(Ok(_))
+        );
+        self.wifi_ctrl = Some(c);
+        self.wifi_ifaces = Some(ifs);
+        if !associated {
+            self.deinit_wifi();
+            return None;
+        }
+        let res = webui::serve(sta, mac, vm, sys, tick);
         self.deinit_wifi();
         Some(res)
     }

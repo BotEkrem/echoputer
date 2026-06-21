@@ -17,6 +17,7 @@ pub enum AppKind {
     Repl,
     Synth,
     Games,
+    WebUi,
     Browser,
     Stopwatch,
     Notes,
@@ -30,12 +31,14 @@ pub struct App {
 }
 
 // Display order only. The icon, name, sub and action are all keyed off `kind`,
-// NOT the array position, so reordering this list rearranges the menu.
-pub const APPS: [App; 10] = [
+// NOT the array position, so reordering this list rearranges the menu. The Game
+// Boy emulator is not a top-level app — it lives inside the Games launcher.
+pub const APPS: [App; 11] = [
     App { kind: AppKind::Hacking },
     App { kind: AppKind::Repl },
     App { kind: AppKind::Synth },
     App { kind: AppKind::Games },
+    App { kind: AppKind::WebUi },
     App { kind: AppKind::Browser },
     App { kind: AppKind::Stopwatch },
     App { kind: AppKind::Notes },
@@ -52,6 +55,7 @@ fn app_name(k: AppKind) -> &'static str {
         AppKind::Repl => "REPL",
         AppKind::Synth => "Synthwave",
         AppKind::Games => i18n::t("Games", "Oyunlar"),
+        AppKind::WebUi => "Web UI",
         AppKind::Browser => i18n::t("File Browser", "Dosya Tarayici"),
         AppKind::Stopwatch => i18n::t("Stopwatch", "Kronometre"),
         AppKind::Notes => i18n::t("Notes", "Notlar"),
@@ -67,6 +71,7 @@ fn app_sub(k: AppKind) -> &'static str {
         AppKind::Repl => i18n::t("interactive scripting shell", "etkilesimli betik kabugu"),
         AppKind::Synth => i18n::t("melodic keyboard synth", "melodik klavye synth"),
         AppKind::Games => i18n::t("Snake, 2048, Tetris, Pong", "Snake, 2048, Tetris, Pong"),
+        AppKind::WebUi => i18n::t("WiFi file + system dashboard", "WiFi dosya + sistem paneli"),
         AppKind::Browser => i18n::t("browse + manage SD", "SD gez + yonet"),
         AppKind::Stopwatch => i18n::t("stopwatch + timer", "kronometre + zamanlayici"),
         AppKind::Notes => i18n::t("text notes on SD", "SD'de metin notlari"),
@@ -147,6 +152,14 @@ fn draw_icon(d: &mut impl DrawTarget<Color = Rgb565>, kind: AppKind, x: i32, y: 
             // two buttons
             let _ = Circle::new(Point::new(x + 12, y + 7), 2).into_styled(fl).draw(d);
             let _ = Circle::new(Point::new(x + 14, y + 10), 2).into_styled(fl).draw(d);
+        }
+        AppKind::WebUi => {
+            // a globe: circle with a couple of latitude lines + a meridian
+            let _ = Circle::new(Point::new(x, y), 17).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 1, y + 8), Point::new(x + 15, y + 8)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 3, y + 4), Point::new(x + 13, y + 4)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 3, y + 12), Point::new(x + 13, y + 12)).into_styled(st).draw(d);
+            let _ = Line::new(Point::new(x + 8, y + 1), Point::new(x + 8, y + 15)).into_styled(st).draw(d);
         }
         AppKind::Stopwatch => {
             // stopwatch: top button + body circle + a hand

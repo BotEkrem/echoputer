@@ -11,7 +11,12 @@ use crate::apps::snake::Snake;
 use crate::apps::tetris::Tetris;
 use crate::{i18n, theme};
 
-/// Display names (language-neutral; arcade titles stay as-is).
+/// Display names (language-neutral; arcade titles stay as-is). With the emulator
+/// built in, "Game Boy" is the last entry — picking it hands off to the emulator
+/// (which owns its own screen, library and save handling).
+#[cfg(feature = "emu")]
+const GAMES: [&str; 5] = ["Snake", "2048", "Tetris", "Pong", "Game Boy"];
+#[cfg(not(feature = "emu"))]
 const GAMES: [&str; 4] = ["Snake", "2048", "Tetris", "Pong"];
 const TOP: i32 = 30;
 const ROW_H: i32 = 20;
@@ -54,7 +59,9 @@ impl Games {
         }
     }
 
-    pub fn on_key<D: DrawTarget<Color = Rgb565>>(&mut self, rc: (u8, u8), d: &mut D) {
+    /// Returns true only when the user picked "Game Boy" — the caller then enters
+    /// the emulator (it needs the SD volume + key releases the launcher can't give).
+    pub fn on_key<D: DrawTarget<Color = Rgb565>>(&mut self, rc: (u8, u8), d: &mut D) -> bool {
         match self.active {
             None => match rc {
                 crate::K_UP => {
@@ -70,6 +77,10 @@ impl Games {
                     }
                 }
                 crate::K_ENTER => {
+                    #[cfg(feature = "emu")]
+                    if self.sel == GAMES.len() - 1 {
+                        return true; // hand off to the emulator
+                    }
                     self.active = Some(self.sel);
                     self.launch(self.sel, d);
                 }
@@ -81,6 +92,7 @@ impl Games {
             Some(3) => self.pong.on_key(rc, d),
             _ => {}
         }
+        false
     }
 
     pub fn tick<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) -> bool {

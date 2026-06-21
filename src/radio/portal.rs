@@ -29,8 +29,11 @@ use esp_hal::time::{Duration, Instant};
 const GW: [u8; 4] = [192, 168, 4, 1];
 /// The single address we lease to clients.
 const LEASE: [u8; 4] = [192, 168, 4, 100];
-/// Ethernet MTU (esp-radio's WIFI MTU is private; 1514 = 1500 IP + 14 header).
-const MTU: usize = 1514;
+/// Ethernet frame MTU we advertise to smoltcp. MUST NOT exceed esp-radio's own
+/// WIFI MTU (default 1492, ESP_RADIO_CONFIG_WIFI_MTU): its TX path copies the frame
+/// into a fixed `[u8; MTU]` and slices `[..len]`, so a larger frame panics with a
+/// slice-index error mid-send (hit the moment a full-size TCP segment goes out).
+const MTU: usize = 1492;
 
 fn gw_ip() -> Ipv4Address {
     Ipv4Address::new(GW[0], GW[1], GW[2], GW[3])

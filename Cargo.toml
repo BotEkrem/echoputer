@@ -16,6 +16,21 @@ selftest = []
 # Diagnostic: print every raw keyboard event (down/up + row/col) over serial, to
 # see whether the TCA8418 reports key releases. Used to design hold-to-repeat.
 keylog = []
+# Diagnostic: at boot, probe for external PSRAM and print its size over serial
+# (decides the emulator's ROM-storage strategy). Off in normal builds.
+psramprobe = []
+# Game Boy emulator (Peanut-GB, vendored C compiled via build.rs + cc). Off by
+# default so the normal build and CI need neither the vendored C nor the GCC
+# cross-compiler. Turn on with `cargo build --release --features emu`.
+emu = []
+# Boot self-test for the emulator: runs an embedded test ROM for 60 frames at
+# boot and prints gb_init/FPS/PPU diagnostics over serial, then falls through to
+# the normal menu. Implies `emu`. For on-device validation without an SD ROM.
+emutest = ["emu"]
+# Game Boy *Color* support: swap the DMG-only Peanut-GB core for Walnut-CGB (adds
+# CGB colour, plays DMG too). Larger core (16 KB VRAM + 32 KB WRAM banks), so it
+# is a separate build — `emu` alone stays the lean, validated DMG emulator.
+emugbc = ["emu"]
 
 [dependencies]
 # Core HAL. `unstable` is required for the I2S driver (audio) and a few helpers.
@@ -60,6 +75,11 @@ smoltcp = { version = "0.13", default-features = false, features = [
     "socket-tcp",
     "socket-dhcpv4",
 ] }
+
+[build-dependencies]
+# Compiles the vendored Game Boy core (Peanut-GB) with the xtensa GCC, but only
+# when the `emu` feature is on (build.rs early-returns otherwise).
+cc = "1"
 
 [profile.release]
 opt-level = 3      # audio synth runs in the main loop; keep it fast (flash is 8MB, size is not a concern)

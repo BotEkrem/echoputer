@@ -3,6 +3,7 @@
 
 # Build artifact — distributed via GitHub Releases, not committed
 /echoputer.bin
+/echoputer-emu.bin
 
 # Claude Code / assistant files
 .claude/

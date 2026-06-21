@@ -4,6 +4,8 @@
 
 pub mod browser;
 pub mod charge;
+#[cfg(feature = "emu")]
+pub mod emu;
 pub mod g2048;
 pub mod games;
 pub mod hacking;
@@ -20,4 +22,5 @@ pub mod synth;
 pub mod sysinfo;
 pub mod tetris;
 pub mod ui;
+pub mod webui;
 pub mod wiki;
