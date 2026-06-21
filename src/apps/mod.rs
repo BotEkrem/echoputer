@@ -11,6 +11,7 @@ pub mod games;
 pub mod hacking;
 pub mod menu;
 pub mod notes;
+pub mod player;
 pub mod pong;
 pub mod repl;
 pub mod scales;

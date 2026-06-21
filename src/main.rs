@@ -30,8 +30,8 @@ mod selftest;
 // main's own imports of the grouped submodules it drives (hal/ radio/ apps/).
 // Everything else is reached by full path: crate::radio::Radio, crate::theme, etc.
 use crate::apps::{
-    browser, charge, games, hacking, menu, notes, repl, scales, settings, splash, stopwatch, synth, sysinfo, ui,
-    webui,
+    browser, charge, games, hacking, menu, notes, player, repl, scales, settings, splash, stopwatch, synth, sysinfo,
+    ui, webui,
 };
 use crate::hal::{battery, es8311, fb, tca8418, ws2812};
 use crate::radio::portal;
@@ -108,6 +108,7 @@ enum Screen {
     Notes,
     Synth,
     WebUi,
+    Player,
     Browser,
     Settings,
     Charge,
@@ -336,6 +337,7 @@ fn main() -> ! {
     let mut settings_ui = settings::Settings::new();
     let mut hacking = hacking::Hacking::new();
     let mut webui = webui::WebUi::new();
+    let mut player = player::Player::new();
     let mut repl = repl::Repl::new();
     let mut games = games::Games::new();
     #[cfg(feature = "emu")]
@@ -560,6 +562,9 @@ fn main() -> ! {
                 if screen == Screen::Notes {
                     notes.save_if_dirty(&vm); // persist before jumping home
                 }
+                if screen == Screen::Player {
+                    player.stop_session(&vm); // release SD handles before leaving
+                }
                 screen = Screen::Menu;
                 menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                 continue;
@@ -590,6 +595,13 @@ fn main() -> ! {
                     }
                     Screen::Games => {
                         if !games.back(&mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                    }
+                    Screen::Player => {
+                        // playing -> back to the track list; list -> home menu
+                        if !player.back(&vm, &mut fbuf) {
                             screen = Screen::Menu;
                             menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                         }
@@ -643,6 +655,11 @@ fn main() -> ! {
                             // comes pre-filled when picked.
                             webui.clear_known();
                             radio::webui::load_creds(&vm, |ssid, pw| webui.add_known(ssid, pw));
+                        }
+                        menu::AppKind::Player => {
+                            screen = Screen::Player;
+                            synth.silence();
+                            player.enter(&vm, &mut fbuf);
                         }
                         menu::AppKind::Browser => {
                             screen = Screen::Browser;
@@ -805,6 +822,7 @@ fn main() -> ! {
                 Screen::Stopwatch => stopwatch.on_key(rc, &mut fbuf),
                 Screen::Sysinfo => sysinfo.on_key(rc, &mut fbuf),
                 Screen::Notes => notes.on_key(rc, &vm, &mut fbuf),
+                Screen::Player => player.on_key(rc, &vm, &mut fbuf),
                 Screen::Browser => browser.on_key(rc, &vm, &mut fbuf),
                 Screen::Settings => {
                     if settings_ui.on_key(rc, &mut config, &mut fbuf) {
@@ -1111,6 +1129,17 @@ fn main() -> ! {
                         }
                         dirty = true;
                     }
+                    Screen::Player => {
+                        // G0 while a track is loaded toggles play/pause; from the
+                        // track list it returns to the home menu.
+                        if player.in_playing() {
+                            player.toggle_pause(&mut fbuf);
+                        } else {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                        dirty = true;
+                    }
                     _ => {
                         screen = Screen::Menu;
                         menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
@@ -1131,6 +1160,13 @@ fn main() -> ! {
             dirty |= emu.tick(&vm, &mut fbuf);
         }
 
+        // ---- audio Player: decode/read + resample the next slice into the ring
+        // every iteration (the I2S DMA buffer gives the slack; UI repaint is paced
+        // by the 40 ms tick below). ----
+        if screen == Screen::Player {
+            player.pump(&vm);
+        }
+
         // ---- audio: keep the DMA buffer topped up (robust against slow frames) ----
         while transfer.available().unwrap_or(0) >= chunk_bytes {
             // While a Game Boy game is playing, feed the I2S from its APU instead
@@ -1139,6 +1175,10 @@ fn main() -> ! {
             #[cfg(feature = "emu")]
             if screen == Screen::Emu {
                 apps::emu::audio_fill(&mut samples);
+                filled = true;
+            }
+            if screen == Screen::Player {
+                player.audio_fill(&mut samples);
                 filled = true;
             }
             if !filled {
@@ -1199,6 +1239,7 @@ fn main() -> ! {
                     }
                 }
                 Screen::Games => dirty |= games.tick(&mut fbuf),
+                Screen::Player => dirty |= player.tick(&mut fbuf),
                 Screen::Stopwatch => dirty |= stopwatch.tick(&mut fbuf),
                 Screen::Sysinfo => dirty |= sysinfo.tick(&mut fbuf),
                 _ => {}

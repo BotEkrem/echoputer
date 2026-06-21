@@ -31,6 +31,12 @@ emutest = ["emu"]
 # CGB colour, plays DMG too). Larger core (16 KB VRAM + 32 KB WRAM banks), so it
 # is a separate build — `emu` alone stays the lean, validated DMG emulator.
 emugbc = ["emu"]
+# Audio Player MP3 support: vendors the minimp3 decoder (single-header CC0),
+# compiled via build.rs + cc with the Xtensa GCC. Off by default so the normal
+# build and CI need neither the vendored C nor the cross-compiler — WAV playback
+# is pure Rust and always available; this feature only adds .mp3 decoding.
+# Turn on with `cargo build --release --features player`.
+player = []
 
 [dependencies]
 # Core HAL. `unstable` is required for the I2S driver (audio) and a few helpers.

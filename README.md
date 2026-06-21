@@ -50,6 +50,14 @@ Hacking is the security toolkit and has its own section below. The rest:
   a hand-rolled HTTP server over smoltcp on the station interface — no SoftAP — and
   long filenames are preserved in the dashboard through a sidecar index even
   though the card itself stays 8.3.
+- Player is an audio player for the `.wav` (and, with `--features player`, `.mp3`)
+  files you drop in `/ECHO/MUSIC/`. WAV is decoded in pure Rust; MP3 uses the
+  vendored minimp3 core. Every source is resampled to the firmware's native 16 kHz
+  and played through the same I2S path the synth and emulator use — at the onboard
+  speaker's bandwidth the difference from a higher rate is inaudible, and the shared
+  audio pipeline stays untouched. ENTER (or G0) plays/pauses, left/right seek ±10 s,
+  up/down change volume, `[`/`]` step to the previous/next track, and a track auto-
+  advances to the next at its end. `` ` `` or Backspace leaves.
 - Synthwave turns the keyboard into a small wavetable synth. Notes are quantised
   to a scale, with pitch rising left to right and bottom to top, so mashing keys
   still comes out musical. G0 cycles the scale and the LED pulses with the audio.
@@ -168,6 +176,10 @@ the colour core's larger RAM use crowds out the radio, so the Web UI / Hacking
 tools are only reliable on the DMG (or plain) build. `--features emutest` runs an
 on-device self-test of the emulator core over serial at boot.
 
+The Player's MP3 support is likewise off by default (it vendors the minimp3 decoder,
+compiled with the same Xtensa GCC). Add `--features player` for `.wav` **and** `.mp3`;
+without it the Player still plays `.wav` (pure Rust, no C, what CI builds).
+
 ## How it fits together
 
 The source is split into layers: drivers at the bottom, a radio subsystem, and the
@@ -197,6 +209,8 @@ src/
     sysinfo, synth, scales, ui, browser, webui, charge, settings, hacking, wiki
     emu/          the Game Boy emulator (mod, ffi, rom, input, video), behind
                   --features emu; the vendored C cores live in vendor/
+    player/       the audio player (mod, wav, resample; mp3 behind --features
+                  player) — WAV/MP3 resampled to 16 kHz onto the shared I2S path
 ```
 
 ## Hardware
@@ -249,6 +263,8 @@ MIT, see [LICENSE](LICENSE).
 - [Peanut-GB](https://github.com/deltabeard/Peanut-GB) by deltabeard — the Game Boy
   (DMG) core and its companion `minigb_apu` sound emulator that the Game Boy app
   embeds; the colour (`emugbc`) build uses a Game Boy Color fork of it
+- [minimp3](https://github.com/lieff/minimp3) by lieff — the public-domain (CC0)
+  single-header MP3 decoder the Player embeds for `.mp3` (behind `--features player`)
 
 Built on the [esp-rs](https://github.com/esp-rs) ecosystem; the docs and crate
 sources that came in most useful:
