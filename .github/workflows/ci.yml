@@ -39,6 +39,12 @@ env:
   # the releases API at once) and falling back to a slow from-source compile.
   GITHUB_TOKEN: ${{ github.token }}
 
+# Least-privilege default: every job's token is READ-ONLY, so the build job — which
+# runs third-party crate build scripts, proc-macros and the vendored C compile — can't
+# use a leaked token to write to the repo. The `release` job opts into write below.
+permissions:
+  contents: read
+
 jobs:
   firmware:
     name: ${{ matrix.label }}
