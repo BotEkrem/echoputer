@@ -258,8 +258,12 @@ pub fn serve<D: BlockDevice, T: TimeSource>(
     st.phase = Phase::Serving;
 
     // ---- phase 2: single-socket HTTP server on :80 ----
-    let mut http_rx = [0u8; 4096];
-    let mut http_tx = [0u8; 4096];
+    // The 4 KB + 4 KB TCP socket buffers go on the HEAP, not serve()'s stack: on the
+    // RAM-tight emugbc build the esp-rtos task stack is small, and 8 KB of buffers in
+    // this frame overflowed it. The heap (the radio's, free here) has ample room, and
+    // unlike a .bss static this doesn't shrink the stack it's trying to spare.
+    let mut http_rx = alloc::vec![0u8; 4096].into_boxed_slice();
+    let mut http_tx = alloc::vec![0u8; 4096].into_boxed_slice();
     let mut http_sock = tcp::Socket::new(
         tcp::SocketBuffer::new(&mut http_rx[..]),
         tcp::SocketBuffer::new(&mut http_tx[..]),
@@ -316,8 +320,11 @@ fn handle_request<D: BlockDevice, T: TimeSource>(
     vm: &VolumeManager<D, T>,
     sys: &SysSnapshot,
 ) {
-    // Accumulate the request head.
-    let mut head = [0u8; 1024];
+    // Accumulate the request head. On the heap, not this frame: handle_request() is the
+    // deepest Rust frame on the serve path and stays live through the send/poll calls
+    // (where the WiFi blob runs on this same task stack), so on the ~51 KB emugbc CPU0
+    // stack keeping 1 KB here helped tip it over. Freed when the request returns.
+    let mut head = alloc::vec![0u8; 1024].into_boxed_slice();
     let mut hlen = 0usize;
     let mut body_in_head = 0usize; // bytes already past CRLFCRLF sitting in `head`
     let mut head_end = 0usize;
@@ -462,8 +469,8 @@ fn send_listing<D: BlockDevice, T: TimeSource>(
     })();
 
     // load the long-name sidecar once, then attach a "long" field per entry
-    let mut idxbuf = [0u8; 2048];
-    let idxn = index_load(vm, &mut idxbuf);
+    let mut idxbuf = alloc::vec![0u8; 2048].into_boxed_slice();
+    let idxn = index_load(vm, &mut idxbuf[..]);
 
     let mut json = alloc::string::String::new();
     json.push_str("{\"path\":\"");

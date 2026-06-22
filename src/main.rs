@@ -237,8 +237,12 @@ fn main() -> ! {
     let spi_device = ExclusiveDevice::new(spi, cs, delay).unwrap();
     // mipidsi chunks the 64,800-byte frame through this staging buffer; 4 KB cuts
     // a full blit from ~127 SPI transactions to ~16 (byte-identical output).
-    let mut spi_buf = [0u8; 4096];
-    let di = SpiInterface::new(spi_device, dc, &mut spi_buf);
+    // Heap, not main()'s stack frame: on the RAM-tight emugbc build the CPU0 stack is
+    // only ~51 KB (leftover RWDATA after the colour core's big statics), and main()'s
+    // large standing frame is what tips the Web UI serve path into a stack overflow.
+    // (Heap, not a `static`: a static grows .bss and shrinks that leftover stack 1:1.)
+    let mut spi_buf = alloc::vec![0u8; 4096].into_boxed_slice();
+    let di = SpiInterface::new(spi_device, dc, &mut spi_buf[..]);
 
     let mut display = Builder::new(ST7789, di)
         .display_size(135, 240)
