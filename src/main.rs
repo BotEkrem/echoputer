@@ -369,8 +369,16 @@ fn main() -> ! {
     // write_dma_circular even with a small 4 KB ring, reclaiming RAM for the
     // larger colour core. The DMG/default build keeps its roomier 32 KB buffer
     // (plain dma_buffers! happens to give enough descriptors at that size).
+    // emugbc keeps a small audio DMA buffer (the colour core needs the RAM), but it
+    // MUST split into clean, equal descriptors: `dma_circular_buffers!(0, 4096)` uses
+    // the default 4092-byte chunk, producing a 4092 + 4 split — and the degenerate
+    // 4-byte descriptor stalls the I2S DMA (no EOF -> available() stuck at 0 -> the
+    // top-up loop never runs -> silent audio for emu/synth/player alike). Forcing a
+    // 1024-byte chunk gives 8 clean 1024-byte descriptors in 8 KB, so the circular
+    // ring actually transmits. The DMG/default build's 32000-byte buffer already
+    // splits into full 4092-byte descriptors, so it keeps the plain macro.
     #[cfg(feature = "emugbc")]
-    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 4096);
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers_chunk_size!(0, 8192, 1024);
     #[cfg(not(feature = "emugbc"))]
     let (_, _, tx_buffer, tx_descriptors) = dma_buffers!(0, 32000);
     let i2s = I2s::new(
