@@ -190,11 +190,12 @@ reserves the RAM the boot stack needs.
 | `audiodiag` | logs I2S audio health (throughput, underruns) over serial once a second, for debugging the audio path. |
 
 Combine them as you like — `cargo build --release --features emugbc,player` is the
-full build. CI builds every shippable combination on each push and uploads it as a
-named artifact, so you can download a ready `.bin` instead of building one yourself:
-`echoputer-base`, `echoputer-mp3`, `echoputer-gameboy`, `echoputer-gameboy-mp3`,
-`echoputer-gameboy-color` and `echoputer-gameboy-color-mp3` (each is the base plus
-the features its name lists).
+full build. You don't have to build any of these yourself, though: every push to
+`main` builds all six and attaches them to the repo's
+[latest release](../../releases/latest) — a rolling build of current `main`, also
+kept as per-run CI artifacts. Grab the `.bin` whose name lists the features you want
+(`echoputer-base`, `echoputer-mp3`, `echoputer-gameboy`, `echoputer-gameboy-mp3`,
+`echoputer-gameboy-color`, `echoputer-gameboy-color-mp3`) and flash it as above.
 
 ## How it fits together
 
