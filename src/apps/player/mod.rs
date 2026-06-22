@@ -751,7 +751,10 @@ fn track_entry(sfn: &ShortFileName, lfn: Option<&str>) -> Option<Entry> {
     #[cfg(feature = "player")]
     let accept_mp3 = is_mp3;
     #[cfg(not(feature = "player"))]
-    let accept_mp3 = false;
+    let accept_mp3 = {
+        let _ = is_mp3; // .mp3 is filtered out without the decoder
+        false
+    };
     if !(is_wav || accept_mp3) {
         return None;
     }

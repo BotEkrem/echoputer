@@ -48,7 +48,6 @@ use esp_hal::{
     analog::adc::{Adc, AdcCalCurve, AdcConfig, AdcPin, Attenuation},
     clock::CpuClock,
     delay::Delay,
-    dma_buffers,
     gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, Pull},
     interrupt::software::SoftwareInterruptControl,
     i2c::master::{Config as I2cConfig, I2c},
@@ -382,7 +381,7 @@ fn main() -> ! {
     #[cfg(feature = "emugbc")]
     let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers_chunk_size!(0, 8184, 4092);
     #[cfg(not(feature = "emugbc"))]
-    let (_, _, tx_buffer, tx_descriptors) = dma_buffers!(0, 32000);
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(0, 32000);
     let i2s = I2s::new(
         peripherals.I2S0,
         peripherals.DMA_CH0,

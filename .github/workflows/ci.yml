@@ -1,9 +1,16 @@
 name: CI
 
-# Build + check the firmware on every push to main and every pull request.
-# The hard gates are the two compiles (normal + self-test feature); formatting
-# and clippy run as non-blocking advisories. A flashable echoputer.bin is built
-# and uploaded so every green commit has a downloadable image.
+# Build + check the firmware on every push to main and every pull request, and
+# publish a flashable echoputer-*.bin for EACH feature variant so anyone can grab
+# the image with the features they want (Game Boy DMG/colour, MP3 player, or the
+# lean base). The matrix entries are the hard compile gates; a "self-test" entry
+# compiles the radio self-test path without shipping it.
+#
+# Feature axes (see Cargo.toml): `emu` = Game Boy (DMG, Peanut-GB), `emugbc` =
+# Game Boy Color (Walnut-CGB, implies emu), `player` = MP3 decode in the audio
+# Player (minimp3). All variants always include the WAV player + the rest of the
+# apps. The `emu`/`emugbc`/`player` builds compile the vendored C in vendor/ with
+# the Xtensa GCC the toolchain action provides.
 
 on:
   push:
@@ -27,17 +34,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: build + checks
+  firmware:
+    name: ${{ matrix.label }}
     runs-on: ubuntu-latest
+    strategy:
+      # One variant failing (e.g. a RAM-tight combo) must not cancel the others.
+      fail-fast: false
+      matrix:
+        include:
+          - { label: base,                  bin: echoputer-base,               features: '',             upload: 'true' }
+          - { label: mp3 player,            bin: echoputer-mp3,                features: 'player',       upload: 'true' }
+          - { label: game boy (dmg),        bin: echoputer-gameboy,            features: 'emu',          upload: 'true' }
+          - { label: game boy (dmg) + mp3,  bin: echoputer-gameboy-mp3,        features: 'emu,player',   upload: 'true' }
+          - { label: game boy color,        bin: echoputer-gameboy-color,      features: 'emugbc',       upload: 'true' }
+          - { label: game boy color + mp3,  bin: echoputer-gameboy-color-mp3,  features: 'emugbc,player', upload: 'true' }
+          # Compile-only gate for the serial self-test path (not a shippable image).
+          - { label: self-test (gate),      bin: '',                           features: 'selftest',     upload: 'false' }
     steps:
       - uses: actions/checkout@v4
 
       # Espressif's Xtensa Rust toolchain (the `esp` channel pinned in
-      # rust-toolchain.toml) + LLVM + rust-src. rust-src is required because
-      # .cargo/config.toml builds core/alloc from source for the bare-metal
-      # xtensa-esp32s3-none-elf target (build-std). ldproxy is only needed for
-      # std/esp-idf linking, so it's off here.
+      # rust-toolchain.toml) + LLVM + rust-src + the bare-metal xtensa-esp-elf GCC
+      # that build.rs drives (via cc) for the emu/player C cores. rust-src is needed
+      # because .cargo/config.toml builds core/alloc from source (build-std).
       - name: Install Xtensa Rust toolchain (esp)
         uses: esp-rs/xtensa-toolchain@v1.7
         with:
@@ -47,32 +66,40 @@ jobs:
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache per variant so differing features don't thrash one cache.
+          key: ${{ matrix.bin || matrix.features }}
 
-      # --- the gates: the firmware must compile, both variants ---
+      # The gate: the firmware must compile with this variant's features.
       - name: Build (release)
-        run: cargo build --release
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          if [ -n "$FEATURES" ]; then
+            cargo build --release --features "$FEATURES"
+          else
+            cargo build --release
+          fi
 
-      - name: Build (self-test feature)
-        run: cargo build --release --features selftest
-
-      # Produce the app-only image the README/Launcher flash, from the release
-      # ELF, and publish it as a build artifact. `save-image` is offline (no
-      # device needed). espflash comes prebuilt via cargo-binstall (fast).
+      # Produce + publish the app-only image for the shippable variants. `save-image`
+      # is offline (no device). espflash comes prebuilt via cargo-binstall (fast).
       - name: Install cargo-binstall
+        if: matrix.upload == 'true'
         uses: cargo-bins/cargo-binstall@main
 
-      - name: Build flashable image (echoputer.bin)
+      - name: Build flashable image (${{ matrix.bin }}.bin)
+        if: matrix.upload == 'true'
         run: |
           # --force: the cargo cache may restore the "espflash installed" record
-          # without the binary itself, making binstall skip the install. Forcing it
-          # always lays down the (prebuilt, fast) binary so `espflash` is on PATH.
+          # without the binary; forcing always lays down the prebuilt binary.
           cargo binstall -y --force espflash
           espflash save-image --chip esp32s3 \
-            target/xtensa-esp32s3-none-elf/release/echoputer echoputer.bin
+            target/xtensa-esp32s3-none-elf/release/echoputer ${{ matrix.bin }}.bin
 
       - name: Upload firmware artifact
+        if: matrix.upload == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: echoputer-firmware
-          path: echoputer.bin
+          name: ${{ matrix.bin }}
+          path: ${{ matrix.bin }}.bin
           if-no-files-found: error

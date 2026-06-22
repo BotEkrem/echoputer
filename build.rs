@@ -19,13 +19,26 @@ fn main() {
 }
 
 /// Common Xtensa cross-compile flags shared by every vendored C core.
+/// The Espressif bare-metal Xtensa GCC tool prefix. espup installs the chip-specific
+/// `xtensa-esp32s3-elf-*`, but some toolchains (and some CI setups) only ship the
+/// unified `xtensa-esp-elf-*`. Probe for the chip-specific one and fall back, so the
+/// C cores build on either without a hardcoded name (cc would otherwise guess a
+/// `xtensa-esp32s3-none-elf-gcc` that does not exist).
+fn xtensa_prefix() -> &'static str {
+    for prefix in ["xtensa-esp32s3-elf", "xtensa-esp-elf"] {
+        if std::process::Command::new(format!("{prefix}-gcc")).arg("--version").output().is_ok() {
+            return prefix;
+        }
+    }
+    "xtensa-esp32s3-elf" // default; cc emits a clear "compiler not found" if absent
+}
+
 fn xtensa_build() -> cc::Build {
+    let prefix = xtensa_prefix();
     let mut build = cc::Build::new();
     build
-        // espup's bare-metal Xtensa GCC (its own newlib); cc would otherwise guess
-        // a `xtensa-esp32s3-none-elf-gcc` that does not exist.
-        .compiler("xtensa-esp32s3-elf-gcc")
-        .archiver("xtensa-esp32s3-elf-ar")
+        .compiler(format!("{prefix}-gcc"))
+        .archiver(format!("{prefix}-ar"))
         // Xtensa: literal pools/calls can exceed the short-call range in a big
         // image; -mlongcalls lets the assembler relax them.
         .flag("-mlongcalls")
