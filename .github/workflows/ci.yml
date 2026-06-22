@@ -32,6 +32,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Authenticate cargo-binstall to the GitHub API so it reliably fetches the
+  # PREBUILT espflash binary instead of getting rate-limited (7 parallel jobs hit
+  # the releases API at once) and falling back to a slow from-source compile.
+  GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
   firmware:
@@ -83,16 +87,19 @@ jobs:
 
       # Produce + publish the app-only image for the shippable variants. `save-image`
       # is offline (no device). espflash comes prebuilt via cargo-binstall (fast).
-      - name: Install cargo-binstall
+      # Install a PREBUILT espflash (never from source). cargo-binstall would fall
+      # back to a multi-minute source compile when it can't fetch the prebuilt (the
+      # `base` job took 6m40s vs ~3m for that reason); install-action only ever lays
+      # down the prebuilt binary, so every job's image step is ~10 s.
+      - name: Install espflash (prebuilt)
         if: matrix.upload == 'true'
-        uses: cargo-bins/cargo-binstall@main
+        uses: taiki-e/install-action@v2
+        with:
+          tool: espflash
 
       - name: Build flashable image (${{ matrix.bin }}.bin)
         if: matrix.upload == 'true'
         run: |
-          # --force: the cargo cache may restore the "espflash installed" record
-          # without the binary; forcing always lays down the prebuilt binary.
-          cargo binstall -y --force espflash
           espflash save-image --chip esp32s3 \
             target/xtensa-esp32s3-none-elf/release/echoputer ${{ matrix.bin }}.bin
 
