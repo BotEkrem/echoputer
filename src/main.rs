@@ -369,16 +369,18 @@ fn main() -> ! {
     // write_dma_circular even with a small 4 KB ring, reclaiming RAM for the
     // larger colour core. The DMG/default build keeps its roomier 32 KB buffer
     // (plain dma_buffers! happens to give enough descriptors at that size).
-    // emugbc keeps a small audio DMA buffer (the colour core needs the RAM), but it
-    // MUST split into clean, equal descriptors: `dma_circular_buffers!(0, 4096)` uses
-    // the default 4092-byte chunk, producing a 4092 + 4 split — and the degenerate
-    // 4-byte descriptor stalls the I2S DMA (no EOF -> available() stuck at 0 -> the
-    // top-up loop never runs -> silent audio for emu/synth/player alike). Forcing a
-    // 1024-byte chunk gives 8 clean 1024-byte descriptors in 8 KB, so the circular
-    // ring actually transmits. The DMG/default build's 32000-byte buffer already
-    // splits into full 4092-byte descriptors, so it keeps the plain macro.
+    // emugbc keeps a small audio DMA buffer (the colour core needs the RAM). Subtlety:
+    // the I2S TX chain ALWAYS re-chunks at the fixed CHUNK_SIZE (4092) at runtime — the
+    // macro's chunk-size argument only sizes the static descriptor ARRAY, not the
+    // transfer. So the buffer LENGTH must not leave a tiny tail descriptor at the
+    // circular wrap: 8192 splits into 4092 + 4092 + 8, and that 8-byte tail (suc_eof
+    // set, like every circular descriptor) replays a ~125 us discontinuity every buffer
+    // loop -> an audible periodic click (NOT an underrun; throughput stays real-time).
+    // A length <= 2*4092 = 8184 trips fill()'s circular even-split into 3 EQUAL
+    // descriptors (8184 -> 3*2728), so there is no tail and no click. The DMG/default
+    // 32000-byte buffer splits into large ~4092 segments (smallest 3356), no tiny tail.
     #[cfg(feature = "emugbc")]
-    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers_chunk_size!(0, 8192, 1024);
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers_chunk_size!(0, 8184, 4092);
     #[cfg(not(feature = "emugbc"))]
     let (_, _, tx_buffer, tx_descriptors) = dma_buffers!(0, 32000);
     let i2s = I2s::new(
@@ -396,7 +398,26 @@ fn main() -> ! {
         .with_ws(peripherals.GPIO43)
         .with_dout(peripherals.GPIO42)
         .build(tx_descriptors);
-    let mut transfer = i2s_tx.write_dma_circular(tx_buffer).unwrap();
+    // The circular DMA transfer is held in an Option so it can be DROPPED + RECREATED
+    // to resync a WEDGED ring: if the main loop ever stalls longer than the DMA buffer
+    // (e.g. the emulator's launch reads the ROM/save off SD for >128 ms), the ring
+    // fully underruns and esp-hal's circular transfer wedges — available()/push()
+    // return Late forever and the SHARED I2S audio (synth + menu too) stays dead until
+    // reboot. esp-hal's circular API can't resync in place, and a struct that owns
+    // `i2s_tx` while also holding a transfer that borrows it would be self-referential
+    // (not expressible in safe Rust), so we reach `i2s_tx` + `tx_buffer` through raw
+    // pointers to decouple the transfer's borrow lifetime and recreate it on demand.
+    //
+    // SAFETY: `i2s_tx` and the static `tx_buffer` both live for the rest of main(),
+    // strictly outliving every transfer made from them, and exactly one transfer
+    // exists at a time (drop the old before making the new). `i2s_tx` is never touched
+    // except through this pointer after this point.
+    let i2s_tx_ptr: *mut _ = &mut i2s_tx;
+    // *mut _ keeps the buffer's concrete `[u8; N]` array type (the dma_buffers! macro
+    // returns &mut [u8; N]); `[u8; N]: ReadBuffer` but the unsized `[u8]` is not.
+    let tx_buf_ptr: *mut _ = tx_buffer;
+    let mut transfer = Some(unsafe { (*i2s_tx_ptr).write_dma_circular(&mut *tx_buf_ptr) }.unwrap());
+    let mut audio_recover_at = Instant::now();
 
     // (WS2812 LED is initialised + cleared before the splash, above, so its
     // power-on pixel doesn't glow white through boot when the LED is meant to be
@@ -410,6 +431,14 @@ fn main() -> ! {
 
     let mut samples = [0i16; CHUNK_FRAMES * 2];
     let chunk_bytes = core::mem::size_of_val(&samples); // i16 buffer pushed as raw LE bytes
+    // Audio-health diagnostics (--features audiodiag): once a second, report bytes
+    // actually pushed to the I2S DMA vs the 64000 B/s real-time target, underrun
+    // count, and the max free space seen. Distinguishes "CPU too slow" (late>0) from
+    // "DMA not draining" (pushed << 64000) from "flowing but glitched" (pushed≈64000).
+    #[cfg(feature = "audiodiag")]
+    let (mut diag_pushed, mut diag_late, mut diag_avail_max) = (0u32, 0u32, 0usize);
+    #[cfg(feature = "audiodiag")]
+    let mut diag_last = Instant::now();
     let mut last_anim = Instant::now();
     let mut last_vu_fw: i32 = -1; // last drawn VU meter fill width (px); gates Synth redraws
     // Hold-to-repeat (PC-style): SET on press, CLEAR on release (now that the
@@ -1176,31 +1205,92 @@ fn main() -> ! {
         }
 
         // ---- audio: keep the DMA buffer topped up (robust against slow frames) ----
-        while transfer.available().unwrap_or(0) >= chunk_bytes {
-            // While a Game Boy game is playing, feed the I2S from its APU instead
-            // of the synth (the synth is silenced on entry).
-            let mut filled = false;
-            #[cfg(feature = "emu")]
-            if screen == Screen::Emu {
-                apps::emu::audio_fill(&mut samples);
-                filled = true;
+        let mut audio_stuck = false;
+        if let Some(tx) = transfer.as_mut() {
+            loop {
+                let avail = match tx.available() {
+                    Ok(a) => a,
+                    Err(_) => {
+                        // circular DMA wedged (fully underran -> all descriptors CPU-owned)
+                        audio_stuck = true;
+                        #[cfg(feature = "audiodiag")]
+                        {
+                            diag_late += 1;
+                        }
+                        0
+                    }
+                };
+                #[cfg(feature = "audiodiag")]
+                if avail > diag_avail_max {
+                    diag_avail_max = avail;
+                }
+                if avail < chunk_bytes {
+                    break;
+                }
+                // While a Game Boy game is playing, feed the I2S from its APU instead
+                // of the synth (the synth is silenced on entry).
+                let mut filled = false;
+                #[cfg(feature = "emu")]
+                if screen == Screen::Emu {
+                    apps::emu::audio_fill(&mut samples);
+                    filled = true;
+                }
+                if screen == Screen::Player {
+                    player.audio_fill(&mut samples);
+                    filled = true;
+                }
+                if !filled {
+                    synth.fill_stereo(&mut samples);
+                }
+                // ESP32-S3 is little-endian, so the i16 sample buffer already has the
+                // exact byte layout the I2S DMA wants — reinterpret it as bytes instead
+                // of repacking element by element (this runs in the tight audio feed).
+                let raw = unsafe {
+                    core::slice::from_raw_parts(samples.as_ptr() as *const u8, core::mem::size_of_val(&samples))
+                };
+                let pushed = match tx.push(raw) {
+                    Ok(n) => n,
+                    Err(_) => {
+                        audio_stuck = true;
+                        #[cfg(feature = "audiodiag")]
+                        {
+                            diag_late += 1;
+                        }
+                        0
+                    }
+                };
+                #[cfg(feature = "audiodiag")]
+                {
+                    diag_pushed += pushed as u32;
+                }
+                if pushed == 0 {
+                    break;
+                }
             }
-            if screen == Screen::Player {
-                player.audio_fill(&mut samples);
-                filled = true;
-            }
-            if !filled {
-                synth.fill_stereo(&mut samples);
-            }
-            // ESP32-S3 is little-endian, so the i16 sample buffer already has the
-            // exact byte layout the I2S DMA wants — reinterpret it as bytes instead
-            // of repacking element by element (this runs in the tight audio feed).
-            let raw = unsafe {
-                core::slice::from_raw_parts(samples.as_ptr() as *const u8, core::mem::size_of_val(&samples))
-            };
-            if transfer.push(raw).unwrap_or(0) == 0 {
-                break;
-            }
+        }
+        // Recover a wedged circular DMA (Late forever after a full underrun, e.g. the
+        // emulator's launch SD reads stall the loop past the buffer): drop + recreate
+        // the transfer to resync. Rate-limited so a chronically slow source (the CGB
+        // emu from SD) just goes choppy instead of thrashing the DMA every iteration.
+        if audio_stuck && audio_recover_at.elapsed() >= Duration::from_millis(40) {
+            audio_recover_at = Instant::now();
+            drop(transfer.take()); // Drop stops the DMA (frees the descriptors)
+            // SAFETY: see the pointer setup above — single transfer at a time, and the
+            // backing i2s_tx/tx_buffer outlive it.
+            transfer = unsafe { (*i2s_tx_ptr).write_dma_circular(&mut *tx_buf_ptr) }.ok();
+        }
+        #[cfg(feature = "audiodiag")]
+        if diag_last.elapsed() >= Duration::from_secs(1) {
+            diag_last = Instant::now();
+            esp_println::println!(
+                "[AUD] pushed={}/64000 B/s  underruns={}  availmax={}",
+                diag_pushed,
+                diag_late,
+                diag_avail_max
+            );
+            diag_pushed = 0;
+            diag_late = 0;
+            diag_avail_max = 0;
         }
 
         // ---- animation tick (~40 ms): LED accent wave (always live) + VU ----

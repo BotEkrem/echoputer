@@ -31,6 +31,10 @@ emutest = ["emu"]
 # CGB colour, plays DMG too). Larger core (16 KB VRAM + 32 KB WRAM banks), so it
 # is a separate build — `emu` alone stays the lean, validated DMG emulator.
 emugbc = ["emu"]
+# Diagnostic: print I2S audio health over serial once a second (bytes pushed vs the
+# 64000 B/s real-time target, underruns, max free-space seen). For debugging audio
+# stutter without a logic analyzer; open a serial monitor at startup. Off normally.
+audiodiag = []
 # Audio Player MP3 support: vendors the minimp3 decoder (single-header CC0),
 # compiled via build.rs + cc with the Xtensa GCC. Off by default so the normal
 # build and CI need neither the vendored C nor the cross-compiler — WAV playback
