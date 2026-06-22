@@ -116,7 +116,7 @@ jobs:
           path: ${{ matrix.bin }}.bin
           if-no-files-found: error
 
-  # Roll a single "latest" prerelease on every push to main: download the .bin
+  # Roll a single "latest" release on every push to main: download the .bin
   # variants the matrix just built and attach them to a permanent, public download
   # page (artifacts expire + hide behind the Actions UI; a Release doesn't). Only the
   # flashable .bin ships — that's the whole firmware image; the ELF isn't needed to
@@ -144,5 +144,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Latest build" \
-            --prerelease \
+            --latest \
             --notes "Rolling build from \`${GITHUB_SHA:0:7}\`. Download the \`.bin\` for the features you want (see the README's *Cargo features* table). Install it from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`."
