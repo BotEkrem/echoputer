@@ -191,11 +191,12 @@ reserves the RAM the boot stack needs.
 
 Combine them as you like — `cargo build --release --features emugbc,player` is the
 full build. You don't have to build any of these yourself, though: every push to
-`main` builds all six and attaches them to the repo's
-[latest release](../../releases/latest) — a rolling build of current `main`, also
-kept as per-run CI artifacts. Grab the `.bin` whose name lists the features you want
-(`echoputer-base`, `echoputer-mp3`, `echoputer-gameboy`, `echoputer-gameboy-mp3`,
-`echoputer-gameboy-color`, `echoputer-gameboy-color-mp3`) and flash it as above.
+`main` builds all six and publishes them as a GitHub Release tagged with that commit,
+so every build is kept and you can tell exactly which one you have. The newest is
+always the repo's [latest release](../../releases/latest) (each is a per-run CI
+artifact too). Grab the `.bin` whose name lists the features you want (`echoputer-base`,
+`echoputer-mp3`, `echoputer-gameboy`, `echoputer-gameboy-mp3`, `echoputer-gameboy-color`,
+`echoputer-gameboy-color-mp3`) and flash it as above.
 
 ## How it fits together
 

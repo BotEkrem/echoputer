@@ -3,9 +3,10 @@ name: CI
 # Build + check the firmware on every push to main and every pull request, and
 # publish a flashable echoputer-*.bin for EACH feature variant (Game Boy DMG/colour,
 # MP3 player, or the lean base) two ways: a per-run CI artifact, and — on pushes to
-# main — attached to a rolling "latest" GitHub Release, so anyone can grab the image
-# with the features they want from a permanent download page. The matrix entries are
-# the hard compile gates; a "self-test" entry compiles that path without shipping it.
+# main — as a per-commit GitHub Release (the newest is the repo's /releases/latest), so
+# anyone can grab the image with the features they want from a permanent download page.
+# The matrix entries are the hard compile gates; a "self-test" entry compiles that path
+# without shipping it.
 #
 # Feature axes (see Cargo.toml): `emu` = Game Boy (DMG, Peanut-GB), `emugbc` =
 # Game Boy Color (Walnut-CGB, implies emu), `player` = MP3 decode in the audio
@@ -116,13 +117,15 @@ jobs:
           path: ${{ matrix.bin }}.bin
           if-no-files-found: error
 
-  # Roll a single "latest" release on every push to main: download the .bin
-  # variants the matrix just built and attach them to a permanent, public download
-  # page (artifacts expire + hide behind the Actions UI; a Release doesn't). Only the
-  # flashable .bin ships — that's the whole firmware image; the ELF isn't needed to
-  # run it. Runs only when all variants built (needs: firmware), and never on PRs.
+  # Cut a release PER COMMIT on every push to main: download the .bin variants the
+  # matrix just built and attach them to a GitHub Release tagged with the commit's
+  # short SHA, so every build is preserved and you can tell exactly which one someone
+  # downloaded (a single rolling release is overwritten + loses that history). The
+  # newest is marked --latest, so the repo's /releases/latest URL always points at it.
+  # Only the flashable .bin ships — that's the whole firmware image; the ELF isn't
+  # needed to run it. Runs only when all variants built (needs: firmware), never on PRs.
   release:
-    name: latest release
+    name: release
     needs: firmware
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -133,16 +136,17 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
-      - name: Refresh the rolling 'latest' release
+      - name: Publish a per-commit release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Delete the old 'latest' release + tag, then recreate it at this commit
-          # with the fresh .bins, so the tag and assets always point at HEAD of main.
-          gh release delete latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release create latest dist/*/*.bin \
+          SHORT="${GITHUB_SHA:0:7}"
+          # Re-run safety: drop this commit's release if it already exists, then make
+          # it fresh. Other commits' releases are untouched (history accumulates).
+          gh release delete "$SHORT" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release create "$SHORT" dist/*/*.bin \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Latest build" \
+            --title "Build $SHORT — $(date -u +%Y-%m-%d)" \
             --latest \
-            --notes "Rolling build from \`${GITHUB_SHA:0:7}\`. Download the \`.bin\` for the features you want (see the README's *Cargo features* table). Install it from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`."
+            --notes "Build of commit \`$SHORT\`. Download the \`.bin\` for the features you want (see the README's *Cargo features* table). Install it from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`."
