@@ -238,6 +238,11 @@ typedef struct
     uint8_t ist_pos[2][39];
 } mp3dec_scratch_t;
 
+/* ECHOPUTER PATCH: the per-frame scratch (~16 KB) is provided on the heap by the
+ * firmware (mp3_set_buffers in wrapper.c) instead of being a stack local or a static —
+ * see the patch inside mp3dec_decode_frame below. */
+extern mp3dec_scratch_t *echoputer_scratch;
+
 static void bs_init(bs_t *bs, const uint8_t *data, int bytes)
 {
     bs->buf   = data;
@@ -1716,11 +1721,12 @@ int mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *mp3, int mp3_bytes, mp3d_s
     const uint8_t *hdr;
     bs_t bs_frame[1];
     /* ECHOPUTER PATCH: this scratch is ~16 KB (grbuf 4.6 KB + syn 8.4 KB +
-     * maindata ~2.8 KB). As a stack local it overflows the bare-metal task stack
-     * on the ESP32-S3 (the esp-hal stack-guard panic). Decoding is single-threaded
-     * and non-reentrant in this firmware (only the main loop's Player calls it), so
-     * a function-local `static` is safe and moves the 16 KB off the stack into .bss. */
-    static mp3dec_scratch_t scratch;
+     * maindata ~2.8 KB). As a stack local it overflows the bare-metal task stack on
+     * the ESP32-S3 (esp-hal stack-guard panic); as a static it bloats permanent .bss
+     * and starves the boot stack. So the firmware hands in a heap buffer (allocated
+     * only while playing) via `echoputer_scratch`, and `scratch` aliases it for the
+     * rest of this (single-threaded, non-reentrant) function. */
+#define scratch (*echoputer_scratch)
 
     if (mp3_bytes > 4 && dec->header[0] == 0xff && hdr_compare(dec->header, mp3))
     {
@@ -1809,6 +1815,7 @@ int mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *mp3, int mp3_bytes, mp3d_s
     }
     return success*hdr_frame_samples(dec->header);
 }
+#undef scratch /* ECHOPUTER PATCH: end of the heap-scratch alias (see above) */
 
 #ifdef MINIMP3_FLOAT_OUTPUT
 void mp3dec_f32_to_s16(const float *in, int16_t *out, int num_samples)

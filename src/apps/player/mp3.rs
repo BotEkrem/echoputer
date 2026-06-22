@@ -28,6 +28,11 @@ extern "C" {
         frame_bytes: *mut i32,
         bitrate_kbps: *mut i32,
     ) -> i32;
+    /// Byte sizes the firmware must allocate for the decoder state + scratch.
+    fn mp3_dec_size() -> u32;
+    fn mp3_scratch_size() -> u32;
+    /// Bind the heap decoder/scratch buffers (NULLs to clear on free).
+    fn mp3_set_buffers(dec: *mut u8, scratch: *mut u8);
 }
 
 const IN_CAP: usize = 16 * 1024;
@@ -37,6 +42,12 @@ const REFILL_BELOW: usize = 4 * 1024;
 
 pub struct Mp3 {
     inbuf: Option<Box<[u8]>>,
+    // Decoder state (~6.7 KB) + per-frame scratch (~16 KB), heap-allocated while
+    // playing and handed to the C core (see wrapper.c). `[u32]` for 4-byte alignment
+    // (the structs hold floats; Xtensa needs aligned access). Kept off .bss so the
+    // permanent reservation doesn't starve the boot stack.
+    dec_buf: Option<Box<[u32]>>,
+    scratch_buf: Option<Box<[u32]>>,
     in_len: usize,
     eof: bool,
     /// Input bytes consumed by the decoder so far (for the position estimate).
@@ -48,17 +59,40 @@ pub struct Mp3 {
 
 impl Mp3 {
     pub const fn new() -> Self {
-        Mp3 { inbuf: None, in_len: 0, eof: false, bytes_done: 0, hz: 0, channels: 0, bitrate_kbps: 0 }
+        Mp3 {
+            inbuf: None,
+            dec_buf: None,
+            scratch_buf: None,
+            in_len: 0,
+            eof: false,
+            bytes_done: 0,
+            hz: 0,
+            channels: 0,
+            bitrate_kbps: 0,
+        }
     }
 
-    /// Allocate the input window from the heap; false if the heap is too full.
+    /// Allocate the input window + decoder state + scratch from the heap and bind the
+    /// state/scratch into the C core. False if anything didn't allocate.
     pub fn alloc(&mut self) -> bool {
         self.inbuf = Some(alloc::vec![0u8; IN_CAP].into_boxed_slice());
-        self.inbuf.is_some()
+        let dn = (unsafe { mp3_dec_size() } as usize + 3) / 4;
+        let sn = (unsafe { mp3_scratch_size() } as usize + 3) / 4;
+        self.dec_buf = Some(alloc::vec![0u32; dn].into_boxed_slice());
+        self.scratch_buf = Some(alloc::vec![0u32; sn].into_boxed_slice());
+        let dp = self.dec_buf.as_mut().unwrap().as_mut_ptr() as *mut u8;
+        let sp = self.scratch_buf.as_mut().unwrap().as_mut_ptr() as *mut u8;
+        unsafe { mp3_set_buffers(dp, sp) };
+        self.inbuf.is_some() && self.dec_buf.is_some() && self.scratch_buf.is_some()
     }
 
     pub fn free(&mut self) {
+        // Clear the C pointers BEFORE dropping the buffers, so a stray decode can't
+        // touch freed memory.
+        unsafe { mp3_set_buffers(core::ptr::null_mut(), core::ptr::null_mut()) };
         self.inbuf = None;
+        self.dec_buf = None;
+        self.scratch_buf = None;
     }
 
     /// Begin decoding `file` from the top: reset the decoder, clear the window, and

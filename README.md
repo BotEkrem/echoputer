@@ -180,6 +180,12 @@ The Player's MP3 support is likewise off by default (it vendors the minimp3 deco
 compiled with the same Xtensa GCC). Add `--features player` for `.wav` **and** `.mp3`;
 without it the Player still plays `.wav` (pure Rust, no C, what CI builds).
 
+The features combine — `--features emu,player` (or `emugbc,player` for colour) builds
+one firmware with both the Game Boy emulator and the audio Player. The two C cores'
+big buffers are heap-allocated only while in use (the emulator and the Player never
+run at the same time), so they don't permanently reserve the RAM that the boot stack
+needs.
+
 ## How it fits together
 
 The source is split into layers: drivers at the bottom, a radio subsystem, and the
