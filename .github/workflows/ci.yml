@@ -150,3 +150,19 @@ jobs:
             --title "Build $SHORT — $(date -u +%Y-%m-%d)" \
             --latest \
             --notes "Build of commit \`$SHORT\`. Download the \`.bin\` for the features you want (see the README's *Cargo features* table). Install it from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`."
+
+      - name: Prune old releases (keep the newest 10)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          KEEP=10
+          # List every release newest-first, skip the KEEP newest, delete the rest
+          # (+ their tags). Also cleans up the old rolling "latest" release over time.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --json tagName,createdAt \
+            --jq "sort_by(.createdAt) | reverse | .[$KEEP:] | .[].tagName" |
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "Pruning old release: $tag"
+            gh release delete "$tag" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY"
+          done
