@@ -99,7 +99,11 @@ jobs:
       - name: Build flashable image (${{ matrix.bin }}.bin)
         if: matrix.upload == 'true'
         run: |
-          cargo binstall -y espflash
+          # --force is REQUIRED: rust-cache restores the "espflash installed" cargo
+          # record without the binary itself, so a plain binstall skips the install
+          # ("already installed") and `espflash` is then not on PATH (exit 127).
+          # --force always lays the (prebuilt, token-authenticated) binary back down.
+          cargo binstall -y --force espflash
           espflash save-image --chip esp32s3 \
             target/xtensa-esp32s3-none-elf/release/echoputer ${{ matrix.bin }}.bin
 
