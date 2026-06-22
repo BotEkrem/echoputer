@@ -169,22 +169,32 @@ espflash flash --port /dev/cu.usbmodem* --baud 921600 --monitor \
   target/xtensa-esp32s3-none-elf/release/echoputer
 ```
 
-The Game Boy emulator is off by default (it needs the vendored C cores in
-`vendor/` and the Xtensa GCC `espup` already installs). Add `--features emu` for
-the monochrome (DMG) build, or `--features emugbc` for Game Boy Color — note that
-the colour core's larger RAM use crowds out the radio, so the Web UI / Hacking
-tools are only reliable on the DMG (or plain) build. `--features emutest` runs an
-on-device self-test of the emulator core over serial at boot.
+### Cargo features
 
-The Player's MP3 support is likewise off by default (it vendors the minimp3 decoder,
-compiled with the same Xtensa GCC). Add `--features player` for `.wav` **and** `.mp3`;
-without it the Player still plays `.wav` (pure Rust, no C, what CI builds).
+These are compile-time Cargo features — flags you pass to the build
+(`cargo build --release --features …`), not options you toggle on the device. All are
+off by default; the emulator and MP3 decoder compile the vendored C cores in `vendor/`
+(so they need the Xtensa GCC `espup` installs) and aren't worth the RAM otherwise.
+They combine freely — the two cores' big buffers are heap-allocated only
+while in use, and the emulator and Player never run at once, so neither permanently
+reserves the RAM the boot stack needs.
 
-The features combine — `--features emu,player` (or `emugbc,player` for colour) builds
-one firmware with both the Game Boy emulator and the audio Player. The two C cores'
-big buffers are heap-allocated only while in use (the emulator and the Player never
-run at the same time), so they don't permanently reserve the RAM that the boot stack
-needs.
+| Feature | What it adds |
+|---------|--------------|
+| *(default)* | base firmware: WAV-only Player, no Game Boy. Pure Rust, no C. |
+| `player` | MP3 decode in the Player (vendors minimp3). |
+| `emu` | Game Boy emulator, monochrome (Peanut-GB). Clean in-game audio. |
+| `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy, and its larger RAM use crowds the radio (Web UI / Hacking are happiest on a DMG or base build). |
+| `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
+| `selftest` | boot-time serial self-test of every radio tool. |
+| `audiodiag` | logs I2S audio health (throughput, underruns) over serial once a second, for debugging the audio path. |
+
+Combine them as you like — `cargo build --release --features emugbc,player` is the
+full build. CI builds every shippable combination on each push and uploads it as a
+named artifact, so you can download a ready `.bin` instead of building one yourself:
+`echoputer-base`, `echoputer-mp3`, `echoputer-gameboy`, `echoputer-gameboy-mp3`,
+`echoputer-gameboy-color` and `echoputer-gameboy-color-mp3` (each is the base plus
+the features its name lists).
 
 ## How it fits together
 
