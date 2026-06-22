@@ -693,6 +693,10 @@ fn main() -> ! {
                             radio::webui::load_creds(&vm, |ssid, pw| webui.add_known(ssid, pw));
                         }
                         menu::AppKind::Player => {
+                            // Free the radio's heap — the Player allocates its decode
+                            // buffers (~59 KB) from the same heap the radio holds for
+                            // the session, and they never run together.
+                            radio.shutdown();
                             screen = Screen::Player;
                             synth.silence();
                             player.enter(&vm, &mut fbuf);
@@ -768,6 +772,9 @@ fn main() -> ! {
                     if games.on_key(rc, &mut fbuf) {
                         #[cfg(feature = "emu")]
                         {
+                            // Free the radio's heap — the emulator's ROM cache + cart
+                            // RAM need the heap the radio holds for the session.
+                            radio.shutdown();
                             screen = Screen::Emu;
                             synth.silence();
                             emu.enter(&vm, &mut fbuf);

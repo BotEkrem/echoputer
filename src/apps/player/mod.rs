@@ -265,7 +265,13 @@ impl Player {
                 }
                 _ => {}
             },
-            State::Error(_) => {}
+            State::Error(msg) => {
+                // On the "low memory" screen (the heap is held by a prior radio use),
+                // ENTER reboots to a clean heap so you can come back and play.
+                if rc == crate::K_ENTER && msg == "low memory" {
+                    esp_hal::system::software_reset();
+                }
+            }
         }
     }
 
@@ -577,19 +583,13 @@ impl Player {
         let dir = vm.open_dir(app, DIR_MUSIC).map_err(|_| "no /MUSIC")?;
         let _ = vm.close_dir(app);
         self.dir = Some(dir);
-        // Allocate the audio buffers from the heap (the radio is idle during
-        // playback, so the heap is free — kept off permanent .bss to spare the boot
-        // stack). Freed in stop_session.
-        self.oring = Some(alloc::vec![0i16; ORING_CAP].into_boxed_slice());
+        // Only the 16 kHz output ring is needed for every session; the MP3 decode
+        // buffers (~43 KB) are allocated lazily on the first MP3 track (open_track),
+        // so a WAV session stays small and fits even when the heap is tight. Fallible
+        // -> "low memory" instead of a panic. Freed in stop_session.
+        self.oring = Some(try_box::<i16>(ORING_CAP).ok_or("low memory")?);
         self.ohead = 0;
         self.otail = 0;
-        #[cfg(feature = "player")]
-        {
-            self.pcm = Some(alloc::vec![0i16; mp3::MAX_SAMPLES].into_boxed_slice());
-            if !self.mp3.alloc() {
-                return Err("low memory");
-            }
-        }
         Ok(())
     }
 
@@ -610,6 +610,15 @@ impl Player {
         if entry.is_mp3 {
             #[cfg(feature = "player")]
             {
+                // Lazily allocate the ~43 KB of MP3 decode buffers on the first MP3
+                // track; a WAV-only session never pays for them. Fallible -> "low
+                // memory" rather than a panic when the heap is too full.
+                if self.pcm.is_none() {
+                    self.pcm = Some(try_box::<i16>(mp3::MAX_SAMPLES).ok_or("low memory")?);
+                }
+                if !self.mp3.alloc() {
+                    return Err("low memory");
+                }
                 self.mp3.start(vm, file);
                 self.kind = Kind::Mp3;
             }
@@ -738,7 +747,12 @@ impl Player {
         theme::clear(d);
         theme::topbar(d, i18n::t("Player", "Oynatici"));
         theme::text(d, msg, PAD, TOP + 10, theme::TITLE_FONT, FG);
-        theme::hint(d, i18n::t("` menu", "` menu"));
+        let hint = if msg == "low memory" {
+            i18n::t("ENTER: reboot to free memory   ` menu", "ENTER: bellek icin reboot   ` menu")
+        } else {
+            i18n::t("` menu", "` menu")
+        };
+        theme::hint(d, hint);
     }
 }
 
@@ -786,6 +800,17 @@ fn track_entry(sfn: &ShortFileName, lfn: Option<&str>) -> Option<Entry> {
         }
     }
     Some(e)
+}
+
+/// Heap-allocate a zeroed boxed slice, or None on OOM (no panic). The Player's
+/// buffers share the heap the radio uses, so allocation can genuinely fail (e.g. right
+/// after a WiFi scan, which leaves esp-radio holding part of the heap); callers turn
+/// None into a "low memory" message instead of crashing the device.
+fn try_box<T: Clone + Default>(n: usize) -> Option<Box<[T]>> {
+    let mut v = alloc::vec::Vec::<T>::new();
+    v.try_reserve_exact(n).ok()?;
+    v.resize(n, T::default());
+    Some(v.into_boxed_slice())
 }
 
 fn copy_into(s: &str, buf: &mut [u8; DISP_CAP]) -> usize {

@@ -251,6 +251,16 @@ impl Radio {
         self.ble_conn = None;
     }
 
+    /// Free ALL radio heap (WiFi + BLE). Call before launching a heap-hungry app —
+    /// the audio Player and Game Boy emulator each need most of the heap that the
+    /// radio otherwise holds for the session, and they never run alongside it. The
+    /// radio re-initialises lazily on its next use (ensure_wifi/ensure_ble re-`steal`
+    /// the peripheral after a deinit), so this is safe to call any time.
+    pub fn shutdown(&mut self) {
+        self.deinit_wifi();
+        self.deinit_ble();
+    }
+
     fn set_channel(&mut self, ch: u8) {
         use esp_radio::wifi::SecondaryChannel;
         if let Some(c) = self.wifi_ctrl.as_mut() {

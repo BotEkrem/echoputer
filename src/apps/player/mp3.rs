@@ -75,15 +75,25 @@ impl Mp3 {
     /// Allocate the input window + decoder state + scratch from the heap and bind the
     /// state/scratch into the C core. False if anything didn't allocate.
     pub fn alloc(&mut self) -> bool {
-        self.inbuf = Some(alloc::vec![0u8; IN_CAP].into_boxed_slice());
+        if self.inbuf.is_some() {
+            return true; // already allocated for this session
+        }
         let dn = (unsafe { mp3_dec_size() } as usize + 3) / 4;
         let sn = (unsafe { mp3_scratch_size() } as usize + 3) / 4;
-        self.dec_buf = Some(alloc::vec![0u32; dn].into_boxed_slice());
-        self.scratch_buf = Some(alloc::vec![0u32; sn].into_boxed_slice());
+        // Fallible: on OOM leave everything None and return false (no panic). Any
+        // partially-allocated buffers in the tuple drop here, freeing their heap.
+        let (Some(inbuf), Some(dec_buf), Some(scratch_buf)) =
+            (super::try_box::<u8>(IN_CAP), super::try_box::<u32>(dn), super::try_box::<u32>(sn))
+        else {
+            return false;
+        };
+        self.inbuf = Some(inbuf);
+        self.dec_buf = Some(dec_buf);
+        self.scratch_buf = Some(scratch_buf);
         let dp = self.dec_buf.as_mut().unwrap().as_mut_ptr() as *mut u8;
         let sp = self.scratch_buf.as_mut().unwrap().as_mut_ptr() as *mut u8;
         unsafe { mp3_set_buffers(dp, sp) };
-        self.inbuf.is_some() && self.dec_buf.is_some() && self.scratch_buf.is_some()
+        true
     }
 
     pub fn free(&mut self) {

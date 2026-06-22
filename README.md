@@ -184,7 +184,7 @@ reserves the RAM the boot stack needs.
 | *(default)* | base firmware: WAV-only Player, no Game Boy. Pure Rust, no C. |
 | `player` | MP3 decode in the Player (vendors minimp3). |
 | `emu` | Game Boy emulator, monochrome (Peanut-GB). Clean in-game audio. |
-| `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy, and its larger RAM use crowds the radio (Web UI / Hacking are happiest on a DMG or base build). |
+| `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. |
 | `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
 | `selftest` | boot-time serial self-test of every radio tool. |
 | `audiodiag` | logs I2S audio health (throughput, underruns) over serial once a second, for debugging the audio path. |
@@ -252,6 +252,12 @@ src/
 - The radio tools only mean anything against real hardware, so their on-device
   behaviour (injection, capture, the portal's credential grab) is checked on the
   board rather than in a host test.
+- Heap budget (no PSRAM, 512 KB SRAM): the WiFi/BLE radio keeps part of the heap for
+  the session once it's used, and the Player's MP3 decode (~43 KB) and the Game Boy
+  emulator each want a big chunk of that same heap. So opening the MP3 player or the
+  emulator *after* using Web UI / Hacking in the same session can report "low memory"
+  — reboot to reclaim it. WAV playback and everything else are unaffected, and on a
+  fresh boot it all just works.
 
 ## Contributing
 
