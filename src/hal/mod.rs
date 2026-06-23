@@ -5,6 +5,7 @@
 pub mod battery;
 pub mod es8311;
 pub mod fb;
+pub mod ir;
 pub mod keymap;
 pub mod tca8418;
 pub mod ws2812;

@@ -1,7 +1,10 @@
 //! Misc — a sub-launcher grouping the small extra apps. Mirrors the Games launcher:
 //! the home menu opens this, picking an item runs it, and G0/Backspace returns to this
 //! list (a second press pops to the home menu). Items that touch the SD card take the
-//! volume manager through `on_key`.
+//! volume manager through `on_key` / the leave paths.
+//!
+//! The Mic recorder is only present off the emugbc (colour) build — its I2S RX DMA
+//! buffer would shrink the tight CPU0 stack enough to overflow the Web UI there.
 
 use embedded_graphics::primitives::{PrimitiveStyle, Triangle};
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
@@ -11,27 +14,38 @@ use crate::apps::calc::Calc;
 use crate::apps::chip8::Chip8;
 use crate::apps::convert::Convert;
 use crate::apps::dice::Dice;
+use crate::apps::ir::Ir;
 use crate::apps::qr::Qr;
+#[cfg(not(feature = "emugbc"))]
+use crate::apps::recorder::Recorder;
+use crate::hal::ir::IrTx;
 use crate::{i18n, theme};
 
-const ITEMS: [&str; 5] = ["Chip-8", "Calc", "Convert", "Dice", "QR"];
+#[cfg(not(feature = "emugbc"))]
+const ITEMS: [&str; 7] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Mic"];
+#[cfg(feature = "emugbc")]
+const ITEMS: [&str; 6] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR"];
+
 const TOP: i32 = 28;
 const ROW_H: i32 = 18;
 const VISIBLE: usize = 5; // list rows that fit between the topbar and the hint line
 
 pub struct Misc {
     sel: usize,
-    scroll: usize,         // top item shown when the list is longer than VISIBLE
-    active: Option<usize>, // None = the list; Some(i) = running item i
+    scroll: usize,
+    active: Option<usize>,
     chip8: Chip8,
     calc: Calc,
     convert: Convert,
     dice: Dice,
     qr: Qr,
+    ir: Ir,
+    #[cfg(not(feature = "emugbc"))]
+    recorder: Recorder,
 }
 
 impl Misc {
-    pub fn new() -> Self {
+    pub fn new(ir_tx: IrTx) -> Self {
         Misc {
             sel: 0,
             scroll: 0,
@@ -41,12 +55,12 @@ impl Misc {
             convert: Convert::new(),
             dice: Dice::new(),
             qr: Qr::new(),
+            ir: Ir::new(ir_tx),
+            #[cfg(not(feature = "emugbc"))]
+            recorder: Recorder::new(),
         }
     }
 
-    // `inline(never)` on the dispatch methods keeps the sub-apps' code in Misc's own
-    // functions instead of inlining into the monolithic `main` — without it `.text.main`
-    // overflows the Xtensa l32r literal-pool reach (~256 KB) and the link fails.
     #[inline(never)]
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.active = None;
@@ -54,7 +68,6 @@ impl Misc {
         self.draw_list(d);
     }
 
-    /// Keep the selected row inside the visible window.
     fn clamp_scroll(&mut self) {
         if self.sel < self.scroll {
             self.scroll = self.sel;
@@ -63,23 +76,27 @@ impl Misc {
         }
     }
 
-    /// Free the heap state of whatever item is running (Chip-8 box buffers, QR matrix).
-    fn exit_active(&mut self) {
+    /// Free / finalise whatever item is running. The recorder needs the SD volume to
+    /// flush + close its WAV, so the leave paths thread it through here.
+    fn exit_active<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>) {
+        let _ = sd; // used by the recorder arm only (absent on emugbc)
         match self.active {
             Some(0) => self.chip8.exit(),
             Some(1) => self.calc.exit(),
             Some(2) => self.convert.exit(),
             Some(3) => self.dice.exit(),
             Some(4) => self.qr.exit(),
+            Some(5) => self.ir.exit(),
+            #[cfg(not(feature = "emugbc"))]
+            Some(6) => self.recorder.finalize(sd),
             _ => {}
         }
     }
 
-    /// Backspace: in an item -> back to the list (freeing its state); in the list ->
-    /// false (the caller pops to the home menu).
-    pub fn back<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) -> bool {
+    /// Backspace: in an item -> back to the list (finalising it); in the list -> false.
+    pub fn back<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>, d: &mut impl DrawTarget<Color = Rgb565>) -> bool {
         if self.active.is_some() {
-            self.exit_active();
+            self.exit_active(sd);
             self.active = None;
             self.draw_list(d);
             true
@@ -88,16 +105,28 @@ impl Misc {
         }
     }
 
-    /// G0 button: same as Backspace here — leave a running item to the list, or pop
-    /// to the home menu from the list.
-    pub fn g0<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) -> bool {
-        self.back(d)
+    /// G0 button: same as Backspace here.
+    pub fn g0<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>, d: &mut impl DrawTarget<Color = Rgb565>) -> bool {
+        self.back(sd, d)
     }
 
-    /// Free any running item's heap state (used when jumping straight home with `).
-    pub fn leave(&mut self) {
-        self.exit_active();
+    /// Free/finalise any running item (used when jumping straight home with `).
+    pub fn leave<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>) {
+        self.exit_active(sd);
         self.active = None;
+    }
+
+    /// True when the Mic recorder is the active item and is recording — main then pops
+    /// fresh I2S RX audio and hands it to [`Misc::mic_feed`].
+    #[cfg(not(feature = "emugbc"))]
+    pub fn mic_armed(&self) -> bool {
+        self.active == Some(6) && self.recorder.is_recording()
+    }
+
+    /// Stream a chunk of captured PCM to the recorder (called by main while recording).
+    #[cfg(not(feature = "emugbc"))]
+    pub fn mic_feed<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>, bytes: &[u8]) {
+        self.recorder.feed(sd, bytes);
     }
 
     #[inline(never)]
@@ -134,6 +163,9 @@ impl Misc {
             Some(2) => self.convert.on_key(rc, d),
             Some(3) => self.dice.on_key(rc, d),
             Some(4) => self.qr.on_key(rc, d),
+            Some(5) => self.ir.on_key(rc, d),
+            #[cfg(not(feature = "emugbc"))]
+            Some(6) => self.recorder.on_key(rc, sd, d),
             _ => {}
         }
     }
@@ -146,6 +178,9 @@ impl Misc {
             Some(2) => self.convert.tick(d),
             Some(3) => self.dice.tick(d),
             Some(4) => self.qr.tick(d),
+            Some(5) => self.ir.tick(d),
+            #[cfg(not(feature = "emugbc"))]
+            Some(6) => self.recorder.tick(d),
             _ => false,
         }
     }
@@ -156,12 +191,16 @@ impl Misc {
         sd: &VolumeManager<D, T>,
         d: &mut impl DrawTarget<Color = Rgb565>,
     ) {
+        let _ = sd; // used by Chip-8 (ROM load); the rest ignore it
         match i {
-            0 => self.chip8.enter(sd, d), // Chip-8 loads its ROM from the SD card
+            0 => self.chip8.enter(sd, d),
             1 => self.calc.enter(d),
             2 => self.convert.enter(d),
             3 => self.dice.enter(d),
             4 => self.qr.enter(d),
+            5 => self.ir.enter(d),
+            #[cfg(not(feature = "emugbc"))]
+            6 => self.recorder.enter(d),
             _ => {}
         }
     }
@@ -170,8 +209,6 @@ impl Misc {
         theme::clear(d);
         theme::topbar(d, i18n::t("Misc", "Diger"));
         let n = ITEMS.len();
-        // Only the VISIBLE-row window starting at `scroll` (the list can be longer
-        // than the screen — without this the last items hid behind the hint line).
         for row in 0..VISIBLE {
             let i = self.scroll + row;
             if i >= n {
@@ -185,7 +222,6 @@ impl Misc {
             }
             theme::text(d, ITEMS[i], theme::PAD + 16, y, theme::TITLE_FONT, col);
         }
-        // Up/down scroll affordances when there's more above/below the window.
         let st = PrimitiveStyle::with_fill(theme::MUTED);
         if self.scroll > 0 {
             let _ = Triangle::new(Point::new(233, 25), Point::new(239, 25), Point::new(236, 20))

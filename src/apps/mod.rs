@@ -13,6 +13,7 @@ pub mod emu;
 pub mod g2048;
 pub mod games;
 pub mod hacking;
+pub mod ir;
 pub mod menu;
 pub mod misc;
 pub mod notes;
@@ -20,6 +21,8 @@ pub mod player;
 pub mod pong;
 pub mod qr;
 pub mod qr_encode;
+#[cfg(not(feature = "emugbc"))]
+pub mod recorder;
 pub mod repl;
 pub mod scales;
 pub mod settings;

@@ -29,3 +29,29 @@ pub fn init<I: I2c>(i2c: &mut I) -> Result<(), I::Error> {
     }
     Ok(())
 }
+
+/// ES8311 ADC / microphone enable, applied AFTER `init()` (Cardputer ADV). Powers up
+/// the PGA + ADC, routes the Mic1 differential input at +24 dB, and forces 16-bit ADC
+/// output to match the ESP32-S3 16-bit I2S RX. The DAC/speaker keeps working under the
+/// 0x01=0xBA clock value, so playback + capture run together (the I2S TX must keep
+/// running to clock the codec). Source: M5Unified `_microphone_enabled_cb_cardputer_adv`
+/// cross-checked against the ES8311 User Guide Rev1.11.
+#[cfg(not(feature = "emugbc"))]
+const ADC_INIT: [(u8, u8); 6] = [
+    (0x01, 0xBA), // CLK_MANAGER: MCLK from BCLK, ADC clock domain enabled (DAC stays on)
+    (0x0E, 0x02), // SYSTEM: power up analog PGA + ADC modulator
+    (0x14, 0x18), // SYSTEM: LINSEL=1 (Mic1p-Mic1n) + PGAGAIN=8 -> +24 dB for the MEMS mic
+    (0x17, 0xBF), // ADC: digital volume 0 dB
+    (0x1C, 0x6A), // ADC: EQ bypass + DC-offset removal (HPF)
+    (0x0A, 0x0C), // SDP_OUT: 16-bit word length (match the 16-bit I2S RX)
+];
+
+/// Enable the microphone (ADC) path. Call after [`init`]. Returns Err on the first
+/// failed I2C write. (Only the non-emugbc builds include the mic recorder.)
+#[cfg(not(feature = "emugbc"))]
+pub fn enable_adc<I: I2c>(i2c: &mut I) -> Result<(), I::Error> {
+    for (reg, val) in ADC_INIT {
+        i2c.write(ADDR, &[reg, val])?;
+    }
+    Ok(())
+}
