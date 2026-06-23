@@ -1174,8 +1174,9 @@ fn main() -> ! {
                         dirty = true;
                     }
                     Screen::Misc => {
-                        // G0 = leave the item back to the Misc list; pop to the menu at the top
-                        if !misc.back(&mut fbuf) {
+                        // G0 = Life toggles its rules overlay; other items leave to the
+                        // list; in the list it pops to the home menu.
+                        if !misc.g0(&mut fbuf) {
                             screen = Screen::Menu;
                             menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                         }

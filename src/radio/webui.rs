@@ -429,10 +429,14 @@ fn send_listing<D: BlockDevice, T: TimeSource>(
 
     // collect entries (short 8.3 names, so download/delete can re-open them)
     const MAXE: usize = 64;
-    let mut names = [[0u8; 13]; MAXE];
-    let mut nlens = [0u8; MAXE];
-    let mut sizes = [0u32; MAXE];
-    let mut dirs = [false; MAXE];
+    // These per-entry tables (~1.2 KB) go on the heap, not handle_request's frame: it's
+    // the deepest Rust frame on the serve path, and keeping the CPU0-stack headroom here
+    // is what keeps the Web UI from overflowing on the RAM-tight emugbc build. Freed when
+    // the request returns; the radio (not the Player) owns the heap during a Web UI session.
+    let mut names = alloc::vec![[0u8; 13]; MAXE].into_boxed_slice();
+    let mut nlens = alloc::vec![0u8; MAXE].into_boxed_slice();
+    let mut sizes = alloc::vec![0u32; MAXE].into_boxed_slice();
+    let mut dirs = alloc::vec![false; MAXE].into_boxed_slice();
     let mut count = 0usize;
 
     let _ = (|| -> Option<()> {

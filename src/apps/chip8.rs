@@ -55,8 +55,9 @@ struct Vm {
     sp: u8,
     dt: u8,
     st: u8,
-    gfx: [u64; CH], // one row per u64 (64 px); bit 63 == x=0
-    keys: u16,      // pressed-key bitmask (decays in tick())
+    gfx: [u64; CH],   // one row per u64 (64 px); bit 63 == x=0
+    shown: [u64; CH], // last-drawn frame, for per-pixel diffing
+    keys: u16,        // pressed-key bitmask (decays in tick())
     rng: u32,
 }
 
@@ -74,6 +75,7 @@ impl Vm {
             dt: 0,
             st: 0,
             gfx: [0; CH],
+            shown: [0; CH],
             keys: 0,
             rng: 0x2545_F491,
         }
@@ -297,8 +299,9 @@ fn load_rom<D: BlockDevice, T: TimeSource>(sd: &VolumeManager<D, T>, mem: &mut [
 }
 
 pub struct Chip8 {
-    vm: Option<Vm>,
-    shown: [u64; CH], // last-drawn frame, for per-pixel diffing
+    // The whole VM (4 KB RAM + frame buffers) is heap-boxed and held ONLY while a ROM
+    // is loaded, so the idle app is ~40 bytes on main's tight stack frame.
+    vm: Option<Box<Vm>>,
     err: Option<&'static str>,
     last_step: Instant,
     last_timer: Instant,
@@ -310,7 +313,6 @@ impl Chip8 {
         let now = Instant::now();
         Chip8 {
             vm: None,
-            shown: [0; CH],
             err: None,
             last_step: now,
             last_timer: now,
@@ -323,7 +325,7 @@ impl Chip8 {
         let mut machine = Vm::new();
         match load_rom(sd, &mut machine.mem) {
             Ok(_) => {
-                self.vm = Some(machine);
+                self.vm = Some(Box::new(machine)); // move the VM onto the heap
                 self.err = None;
             }
             Err(e) => {
@@ -331,7 +333,6 @@ impl Chip8 {
                 self.vm = None;
             }
         }
-        self.shown = [0; CH];
         let now = Instant::now();
         self.last_step = now;
         self.last_timer = now;
@@ -380,26 +381,25 @@ impl Chip8 {
             }
         }
         // Repaint only the pixels that changed since the last frame.
-        let cur = match self.vm.as_ref() {
-            Some(vm) => vm.gfx,
-            None => return false,
-        };
         let mut changed = false;
-        for r in 0..CH {
-            let diff = cur[r] ^ self.shown[r];
-            if diff == 0 {
-                continue;
-            }
-            changed = true;
-            for x in 0..CW {
-                let mask = 1u64 << (63 - x);
-                if diff & mask == 0 {
+        if let Some(vm) = self.vm.as_mut() {
+            let cur = vm.gfx;
+            for r in 0..CH {
+                let diff = cur[r] ^ vm.shown[r];
+                if diff == 0 {
                     continue;
                 }
-                let col = if cur[r] & mask != 0 { theme::accent() } else { theme::BG };
-                theme::fill(d, OX + x as i32 * SCALE, OY + r as i32 * SCALE, SCALE as u32, SCALE as u32, col);
+                changed = true;
+                for x in 0..CW {
+                    let mask = 1u64 << (63 - x);
+                    if diff & mask == 0 {
+                        continue;
+                    }
+                    let col = if cur[r] & mask != 0 { theme::accent() } else { theme::BG };
+                    theme::fill(d, OX + x as i32 * SCALE, OY + r as i32 * SCALE, SCALE as u32, SCALE as u32, col);
+                }
+                vm.shown[r] = cur[r];
             }
-            self.shown[r] = cur[r];
         }
         changed
     }

@@ -3,13 +3,17 @@
 //! Re-exported flat at the crate root (see main.rs).
 
 pub mod browser;
+pub mod calc;
 pub mod charge;
 pub mod chip8;
+pub mod convert;
+pub mod dice;
 #[cfg(feature = "emu")]
 pub mod emu;
 pub mod g2048;
 pub mod games;
 pub mod hacking;
+pub mod life;
 pub mod menu;
 pub mod misc;
 pub mod notes;
