@@ -4,12 +4,14 @@
 
 pub mod browser;
 pub mod charge;
+pub mod chip8;
 #[cfg(feature = "emu")]
 pub mod emu;
 pub mod g2048;
 pub mod games;
 pub mod hacking;
 pub mod menu;
+pub mod misc;
 pub mod notes;
 pub mod player;
 pub mod pong;

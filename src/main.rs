@@ -30,8 +30,8 @@ mod selftest;
 // main's own imports of the grouped submodules it drives (hal/ radio/ apps/).
 // Everything else is reached by full path: crate::radio::Radio, crate::theme, etc.
 use crate::apps::{
-    browser, charge, games, hacking, menu, notes, player, repl, scales, settings, splash, stopwatch, synth, sysinfo,
-    ui, webui,
+    browser, charge, games, hacking, menu, misc, notes, player, repl, scales, settings, splash, stopwatch, synth,
+    sysinfo, ui, webui,
 };
 use crate::hal::{battery, es8311, fb, tca8418, ws2812};
 use crate::radio::portal;
@@ -105,6 +105,7 @@ enum Screen {
     Stopwatch,
     Sysinfo,
     Notes,
+    Misc,
     Synth,
     WebUi,
     Player,
@@ -343,6 +344,7 @@ fn main() -> ! {
     let mut player = player::Player::new();
     let mut repl = repl::Repl::new();
     let mut games = games::Games::new();
+    let mut misc = misc::Misc::new();
     #[cfg(feature = "emu")]
     let mut emu = apps::emu::Emu::new();
     let mut stopwatch = stopwatch::Stopwatch::new();
@@ -605,6 +607,9 @@ fn main() -> ! {
                 if screen == Screen::Player {
                     player.stop_session(&vm); // release SD handles before leaving
                 }
+                if screen == Screen::Misc {
+                    misc.leave(); // free any running item's heap before leaving
+                }
                 screen = Screen::Menu;
                 menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                 continue;
@@ -635,6 +640,12 @@ fn main() -> ! {
                     }
                     Screen::Games => {
                         if !games.back(&mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                    }
+                    Screen::Misc => {
+                        if !misc.back(&mut fbuf) {
                             screen = Screen::Menu;
                             menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                         }
@@ -736,6 +747,11 @@ fn main() -> ! {
                             synth.silence();
                             games.enter(&mut fbuf);
                         }
+                        menu::AppKind::Misc => {
+                            screen = Screen::Misc;
+                            synth.silence();
+                            misc.enter(&mut fbuf);
+                        }
                         menu::AppKind::Stopwatch => {
                             screen = Screen::Stopwatch;
                             synth.silence();
@@ -771,6 +787,7 @@ fn main() -> ! {
                     }
                 },
                 Screen::Repl => repl.on_key(rc, &mut fbuf),
+                Screen::Misc => misc.on_key(rc, &vm, &mut fbuf),
                 Screen::Games => {
                     // true == the user picked "Game Boy"; hand off to the emulator.
                     if games.on_key(rc, &mut fbuf) {
@@ -1156,6 +1173,14 @@ fn main() -> ! {
                         }
                         dirty = true;
                     }
+                    Screen::Misc => {
+                        // G0 = leave the item back to the Misc list; pop to the menu at the top
+                        if !misc.back(&mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                        dirty = true;
+                    }
                     Screen::WebUi => {
                         // G0 = password field -> list; list/status -> home menu
                         if !webui.back(&mut fbuf) {
@@ -1347,6 +1372,7 @@ fn main() -> ! {
                     }
                 }
                 Screen::Games => dirty |= games.tick(&mut fbuf),
+                Screen::Misc => dirty |= misc.tick(&mut fbuf),
                 Screen::Player => dirty |= player.tick(&mut fbuf),
                 Screen::Stopwatch => dirty |= stopwatch.tick(&mut fbuf),
                 Screen::Sysinfo => dirty |= sysinfo.tick(&mut fbuf),

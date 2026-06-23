@@ -22,6 +22,7 @@ pub enum AppKind {
     Browser,
     Stopwatch,
     Notes,
+    Misc,
     Charge,
     Settings,
     Sysinfo,
@@ -34,7 +35,7 @@ pub struct App {
 // Display order only. The icon, name, sub and action are all keyed off `kind`,
 // NOT the array position, so reordering this list rearranges the menu. The Game
 // Boy emulator is not a top-level app — it lives inside the Games launcher.
-pub const APPS: [App; 12] = [
+pub const APPS: [App; 13] = [
     App { kind: AppKind::Hacking },
     App { kind: AppKind::Repl },
     App { kind: AppKind::Synth },
@@ -44,6 +45,7 @@ pub const APPS: [App; 12] = [
     App { kind: AppKind::Browser },
     App { kind: AppKind::Stopwatch },
     App { kind: AppKind::Notes },
+    App { kind: AppKind::Misc },
     App { kind: AppKind::Charge },
     App { kind: AppKind::Settings },
     App { kind: AppKind::Sysinfo },
@@ -62,6 +64,7 @@ fn app_name(k: AppKind) -> &'static str {
         AppKind::Browser => i18n::t("File Browser", "Dosya Tarayici"),
         AppKind::Stopwatch => i18n::t("Stopwatch", "Kronometre"),
         AppKind::Notes => i18n::t("Notes", "Notlar"),
+        AppKind::Misc => i18n::t("Misc", "Diger"),
         AppKind::Charge => i18n::t("Charge", "Sarj"),
         AppKind::Settings => i18n::t("Settings", "Ayarlar"),
         AppKind::Sysinfo => i18n::t("System", "Sistem"),
@@ -79,6 +82,7 @@ fn app_sub(k: AppKind) -> &'static str {
         AppKind::Browser => i18n::t("browse + manage SD", "SD gez + yonet"),
         AppKind::Stopwatch => i18n::t("stopwatch + timer", "kronometre + zamanlayici"),
         AppKind::Notes => i18n::t("text notes on SD", "SD'de metin notlari"),
+        AppKind::Misc => i18n::t("Chip-8 + small extras", "Chip-8 + kucuk ekstralar"),
         AppKind::Charge => i18n::t("battery status / charging", "pil durumu / sarj"),
         AppKind::Settings => i18n::t("theme + app preferences", "tema + uygulama ayarlari"),
         AppKind::Sysinfo => i18n::t("device info + stats", "cihaz bilgi + durum"),
@@ -196,6 +200,12 @@ fn draw_icon(d: &mut impl DrawTarget<Color = Rgb565>, kind: AppKind, x: i32, y: 
                 let yy = y + 5 + i * 3;
                 let _ = Line::new(Point::new(x + 1, yy), Point::new(x + 4, yy)).into_styled(st).draw(d);
                 let _ = Line::new(Point::new(x + 15, yy), Point::new(x + 18, yy)).into_styled(st).draw(d);
+            }
+        }
+        AppKind::Misc => {
+            // three dots — the universal "more / misc" glyph
+            for i in 0..3i32 {
+                let _ = Circle::new(Point::new(x + 1 + i * 6, y + 6), 4).into_styled(fl).draw(d);
             }
         }
     }
