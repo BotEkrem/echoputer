@@ -205,7 +205,7 @@ impl Calc {
         self.draw_body(d);
         theme::hint(
             d,
-            i18n::t("0-9 . + - * /  = eval  bksp  c clear", "0-9 . + - * /  = hesapla  bksp  c sil"),
+            i18n::t("digits + - x /   ENTER = result   bksp  c clr", "rakam + - x /   ENTER = sonuc   bksp  c sil"),
         );
     }
 
@@ -226,12 +226,13 @@ impl Calc {
         if let Some(ch) = keymap::ch_shift(rc.0, rc.1, false) {
             match ch {
                 b'0'..=b'9' | b'.' => self.push_char(ch),
-                b'+' => self.press_op(Op::Add),
+                // The '='/'+' key adds — '+' is its shifted label, out of reach with no
+                // shift tracking here — so the unshifted '=' does the add; ENTER is
+                // "equals". 'x'/'X' is the friendly multiply alias (no shift needed).
+                b'+' | b'=' => self.press_op(Op::Add),
                 b'-' => self.press_op(Op::Sub),
-                // '*' is reachable shifted; also accept 'x'/'X' as a friendly alias.
                 b'*' | b'x' | b'X' => self.press_op(Op::Mul),
                 b'/' => self.press_op(Op::Div),
-                b'=' => self.press_equals(),
                 b'c' | b'C' => self.clear_all(),
                 _ => return, // ignore unrelated keys (no redraw)
             }
