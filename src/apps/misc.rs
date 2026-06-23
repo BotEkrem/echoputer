@@ -5,6 +5,7 @@
 //! (Conway's Life uses it to toggle its rules overlay), everything else falls back to
 //! "leave the item".
 
+use embedded_graphics::primitives::{PrimitiveStyle, Triangle};
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 use embedded_sdmmc::{BlockDevice, TimeSource, VolumeManager};
 
@@ -18,11 +19,13 @@ use crate::{i18n, theme};
 
 const ITEMS: [&str; 6] = ["Chip-8", "Calc", "Convert", "Dice", "Life", "QR"];
 const LIFE: usize = 4; // index of Conway's Life (G0 toggles its rules overlay)
-const TOP: i32 = 30;
+const TOP: i32 = 28;
 const ROW_H: i32 = 18;
+const VISIBLE: usize = 5; // list rows that fit between the topbar and the hint line
 
 pub struct Misc {
     sel: usize,
+    scroll: usize,         // top item shown when the list is longer than VISIBLE
     active: Option<usize>, // None = the list; Some(i) = running item i
     chip8: Chip8,
     calc: Calc,
@@ -36,6 +39,7 @@ impl Misc {
     pub fn new() -> Self {
         Misc {
             sel: 0,
+            scroll: 0,
             active: None,
             chip8: Chip8::new(),
             calc: Calc::new(),
@@ -52,7 +56,17 @@ impl Misc {
     #[inline(never)]
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.active = None;
+        self.clamp_scroll();
         self.draw_list(d);
+    }
+
+    /// Keep the selected row inside the visible window.
+    fn clamp_scroll(&mut self) {
+        if self.sel < self.scroll {
+            self.scroll = self.sel;
+        } else if self.sel >= self.scroll + VISIBLE {
+            self.scroll = self.sel + 1 - VISIBLE;
+        }
     }
 
     /// Free the heap state of whatever item is running (Chip-8 / Life box buffers).
@@ -112,12 +126,14 @@ impl Misc {
                 crate::K_UP => {
                     if self.sel > 0 {
                         self.sel -= 1;
+                        self.clamp_scroll();
                         self.draw_list(d);
                     }
                 }
                 crate::K_DOWN => {
                     if self.sel + 1 < ITEMS.len() {
                         self.sel += 1;
+                        self.clamp_scroll();
                         self.draw_list(d);
                     }
                 }
@@ -170,14 +186,34 @@ impl Misc {
     fn draw_list<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
         theme::clear(d);
         theme::topbar(d, i18n::t("Misc", "Diger"));
-        for (i, name) in ITEMS.iter().enumerate() {
-            let y = TOP + i as i32 * ROW_H;
+        let n = ITEMS.len();
+        // Only the VISIBLE-row window starting at `scroll` (the list can be longer
+        // than the screen — without this the last items hid behind the hint line).
+        for row in 0..VISIBLE {
+            let i = self.scroll + row;
+            if i >= n {
+                break;
+            }
+            let y = TOP + row as i32 * ROW_H;
             let selected = i == self.sel;
             let col = if selected { theme::accent() } else { theme::MUTED };
             if selected {
                 theme::text(d, ">", theme::PAD, y, theme::TITLE_FONT, theme::accent());
             }
-            theme::text(d, name, theme::PAD + 16, y, theme::TITLE_FONT, col);
+            theme::text(d, ITEMS[i], theme::PAD + 16, y, theme::TITLE_FONT, col);
+        }
+        // Up/down scroll affordances when there's more above/below the window.
+        let st = PrimitiveStyle::with_fill(theme::MUTED);
+        if self.scroll > 0 {
+            let _ = Triangle::new(Point::new(233, 25), Point::new(239, 25), Point::new(236, 20))
+                .into_styled(st)
+                .draw(d);
+        }
+        if self.scroll + VISIBLE < n {
+            let yb = TOP + VISIBLE as i32 * ROW_H - 8;
+            let _ = Triangle::new(Point::new(233, yb), Point::new(239, yb), Point::new(236, yb + 5))
+                .into_styled(st)
+                .draw(d);
         }
         theme::hint(d, i18n::t("UP/DN pick  ENTER open  ` menu", "YUK/AS sec  ENTER ac  ` menu"));
     }
