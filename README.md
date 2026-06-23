@@ -69,6 +69,20 @@ Hacking is the security toolkit and has its own section below. The rest:
 - Notes is a tiny text editor over six SD slots under `/ECHO/NOTES/`. Pick a
   slot, type (ENTER inserts a newline, the `Aa` key toggles case), and it saves
   back to the card automatically when you leave the editor.
+- Misc is a sub-launcher (like Games) that groups the small extra apps in a
+  scrolling list: **Chip-8**, a tiny CHIP-8 interpreter that runs a ROM dropped at
+  `/ECHO/CHIP8.CH8` (the `1234`/`qwer`/`asdf`/`zxcv` block maps to the hex keypad,
+  arrows alias 2/4/6/8); **Calc**, an immediate-execution calculator (the `=`/`+`
+  key adds, ENTER is equals, `x` multiplies); **Convert**, a unit converter across
+  length, mass, temperature and data; **Dice**, dice presets (d4–d100 and a coin)
+  plus a custom "random between X and Y" range you type in; **QR**, which turns
+  typed text — a URL, a WiFi string — into a scannable QR code on the panel; **IR**,
+  a transmit-only remote that fires NEC codes from the onboard IR LED on GPIO44
+  (a few well-known TV-power presets plus a custom 32-bit code entered in hex; aim
+  the top edge at the device); and, on every build except `emugbc`, **Mic**, a
+  recorder that captures the onboard microphone to a WAV at `/ECHO/REC0.WAV` (the
+  colour build leaves it out — its RAM is too tight to add the capture buffer next
+  to the radio). `` ` ``/Backspace steps back to the list, then to the home menu.
 - Charge is a full-screen battery gauge for leaving the device on the charger;
   the ADV only charges while it is powered on.
 - Settings holds the preferences, grouped into General, Synthwave and File
@@ -184,7 +198,7 @@ reserves the RAM the boot stack needs.
 | *(default)* | base firmware: WAV-only Player, no Game Boy. Pure Rust, no C. |
 | `player` | MP3 decode in the Player (vendors minimp3). |
 | `emu` | Game Boy emulator, monochrome (Peanut-GB). Clean in-game audio. |
-| `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. |
+| `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. The colour core's RAM use also drops the Misc **Mic** recorder from this build (its capture buffer won't fit beside the radio). |
 | `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
 | `selftest` | boot-time serial self-test of every radio tool. |
 | `audiodiag` | logs I2S audio health (throughput, underruns) over serial once a second, for debugging the audio path. |
@@ -212,7 +226,7 @@ src/
   selftest.rs   the serial self-test build (behind --features selftest)
 
   hal/          board drivers, the framebuffer and the keymap
-    fb, battery, es8311, tca8418, ws2812, keymap
+    fb, battery, es8311, tca8418, ws2812, ir (IR-LED NEC transmitter), keymap
 
   radio/        the WiFi/BLE stack the Hacking and Web UI apps drive
     mod.rs        Radio, the sole owner of the WiFi+BLE peripherals
@@ -225,6 +239,8 @@ src/
   apps/         the home screen and the apps
     menu, splash, repl, games (snake, g2048, tetris, pong), stopwatch, notes,
     sysinfo, synth, scales, ui, browser, webui, charge, settings, hacking, wiki
+    misc          the Misc sub-launcher + its apps: chip8, calc, convert, dice,
+                  qr (+ qr_encode), ir (NEC remote); recorder (mic -> WAV) off emugbc
     emu/          the Game Boy emulator (mod, ffi, rom, input, video), behind
                   --features emu; the vendored C cores live in vendor/
     player/       the audio player (mod, wav, resample; mp3 behind --features
@@ -237,9 +253,10 @@ src/
 |-------|------------|
 | Display, ST7789V2 240x135 | SPI2, SCK 36, MOSI 35, CS 37, DC 34, RST 33, backlight 38 |
 | Keyboard, TCA8418 @ 0x34 | I2C, SDA 8, SCL 9 |
-| Audio, ES8311 @ 0x18 + NS4150B | I2S0, BCLK 41, WS 43, DOUT 42 |
+| Audio, ES8311 @ 0x18 + NS4150B | I2S0, BCLK 41, WS 43, DOUT 42; DIN 46 (mic ADC, off emugbc) |
 | SD card | SPI3, SCK 40, MOSI 14, MISO 39, CS 12, FAT32 |
-| RGB LED, WS2812 | GPIO21 |
+| RGB LED, WS2812 | GPIO21 (RMT ch0) |
+| IR transmitter | GPIO44 (RMT ch1), 38 kHz NEC, transmit-only |
 | Button, G0 | GPIO0 |
 | Battery sense | ADC on GPIO10, 2:1 divider |
 
