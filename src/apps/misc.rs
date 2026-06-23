@@ -1,9 +1,7 @@
 //! Misc — a sub-launcher grouping the small extra apps. Mirrors the Games launcher:
 //! the home menu opens this, picking an item runs it, and G0/Backspace returns to this
 //! list (a second press pops to the home menu). Items that touch the SD card take the
-//! volume manager through `on_key`; G0 is routed to the active item via [`Misc::g0`]
-//! (Conway's Life uses it to toggle its rules overlay), everything else falls back to
-//! "leave the item".
+//! volume manager through `on_key`.
 
 use embedded_graphics::primitives::{PrimitiveStyle, Triangle};
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
@@ -13,12 +11,10 @@ use crate::apps::calc::Calc;
 use crate::apps::chip8::Chip8;
 use crate::apps::convert::Convert;
 use crate::apps::dice::Dice;
-use crate::apps::life::Life;
 use crate::apps::qr::Qr;
 use crate::{i18n, theme};
 
-const ITEMS: [&str; 6] = ["Chip-8", "Calc", "Convert", "Dice", "Life", "QR"];
-const LIFE: usize = 4; // index of Conway's Life (G0 toggles its rules overlay)
+const ITEMS: [&str; 5] = ["Chip-8", "Calc", "Convert", "Dice", "QR"];
 const TOP: i32 = 28;
 const ROW_H: i32 = 18;
 const VISIBLE: usize = 5; // list rows that fit between the topbar and the hint line
@@ -31,7 +27,6 @@ pub struct Misc {
     calc: Calc,
     convert: Convert,
     dice: Dice,
-    life: Life,
     qr: Qr,
 }
 
@@ -45,12 +40,11 @@ impl Misc {
             calc: Calc::new(),
             convert: Convert::new(),
             dice: Dice::new(),
-            life: Life::new(),
             qr: Qr::new(),
         }
     }
 
-    // `inline(never)` on the dispatch methods keeps all six sub-apps' code in Misc's own
+    // `inline(never)` on the dispatch methods keeps the sub-apps' code in Misc's own
     // functions instead of inlining into the monolithic `main` — without it `.text.main`
     // overflows the Xtensa l32r literal-pool reach (~256 KB) and the link fails.
     #[inline(never)]
@@ -69,15 +63,14 @@ impl Misc {
         }
     }
 
-    /// Free the heap state of whatever item is running (Chip-8 / Life box buffers).
+    /// Free the heap state of whatever item is running (Chip-8 box buffers, QR matrix).
     fn exit_active(&mut self) {
         match self.active {
             Some(0) => self.chip8.exit(),
             Some(1) => self.calc.exit(),
             Some(2) => self.convert.exit(),
             Some(3) => self.dice.exit(),
-            Some(4) => self.life.exit(),
-            Some(5) => self.qr.exit(),
+            Some(4) => self.qr.exit(),
             _ => {}
         }
     }
@@ -95,17 +88,10 @@ impl Misc {
         }
     }
 
-    /// G0 button: Life toggles its rules overlay (stays in the app); any other running
-    /// item leaves to the list; in the list, returns false so the caller goes home.
+    /// G0 button: same as Backspace here — leave a running item to the list, or pop
+    /// to the home menu from the list.
     pub fn g0<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) -> bool {
-        match self.active {
-            Some(LIFE) => {
-                self.life.help(d);
-                true
-            }
-            Some(_) => self.back(d),
-            None => false,
-        }
+        self.back(d)
     }
 
     /// Free any running item's heap state (used when jumping straight home with `).
@@ -147,8 +133,7 @@ impl Misc {
             Some(1) => self.calc.on_key(rc, d),
             Some(2) => self.convert.on_key(rc, d),
             Some(3) => self.dice.on_key(rc, d),
-            Some(4) => self.life.on_key(rc, d),
-            Some(5) => self.qr.on_key(rc, d),
+            Some(4) => self.qr.on_key(rc, d),
             _ => {}
         }
     }
@@ -160,8 +145,7 @@ impl Misc {
             Some(1) => self.calc.tick(d),
             Some(2) => self.convert.tick(d),
             Some(3) => self.dice.tick(d),
-            Some(4) => self.life.tick(d),
-            Some(5) => self.qr.tick(d),
+            Some(4) => self.qr.tick(d),
             _ => false,
         }
     }
@@ -177,8 +161,7 @@ impl Misc {
             1 => self.calc.enter(d),
             2 => self.convert.enter(d),
             3 => self.dice.enter(d),
-            4 => self.life.enter(d),
-            5 => self.qr.enter(d),
+            4 => self.qr.enter(d),
             _ => {}
         }
     }

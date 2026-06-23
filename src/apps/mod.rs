@@ -13,7 +13,6 @@ pub mod emu;
 pub mod g2048;
 pub mod games;
 pub mod hacking;
-pub mod life;
 pub mod menu;
 pub mod misc;
 pub mod notes;
