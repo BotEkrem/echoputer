@@ -13,9 +13,10 @@ use crate::apps::chip8::Chip8;
 use crate::apps::convert::Convert;
 use crate::apps::dice::Dice;
 use crate::apps::life::Life;
+use crate::apps::qr::Qr;
 use crate::{i18n, theme};
 
-const ITEMS: [&str; 5] = ["Chip-8", "Calc", "Convert", "Dice", "Life"];
+const ITEMS: [&str; 6] = ["Chip-8", "Calc", "Convert", "Dice", "Life", "QR"];
 const LIFE: usize = 4; // index of Conway's Life (G0 toggles its rules overlay)
 const TOP: i32 = 30;
 const ROW_H: i32 = 18;
@@ -28,6 +29,7 @@ pub struct Misc {
     convert: Convert,
     dice: Dice,
     life: Life,
+    qr: Qr,
 }
 
 impl Misc {
@@ -40,9 +42,14 @@ impl Misc {
             convert: Convert::new(),
             dice: Dice::new(),
             life: Life::new(),
+            qr: Qr::new(),
         }
     }
 
+    // `inline(never)` on the dispatch methods keeps all six sub-apps' code in Misc's own
+    // functions instead of inlining into the monolithic `main` — without it `.text.main`
+    // overflows the Xtensa l32r literal-pool reach (~256 KB) and the link fails.
+    #[inline(never)]
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.active = None;
         self.draw_list(d);
@@ -56,6 +63,7 @@ impl Misc {
             Some(2) => self.convert.exit(),
             Some(3) => self.dice.exit(),
             Some(4) => self.life.exit(),
+            Some(5) => self.qr.exit(),
             _ => {}
         }
     }
@@ -92,6 +100,7 @@ impl Misc {
         self.active = None;
     }
 
+    #[inline(never)]
     pub fn on_key<D: BlockDevice, T: TimeSource>(
         &mut self,
         rc: (u8, u8),
@@ -123,10 +132,12 @@ impl Misc {
             Some(2) => self.convert.on_key(rc, d),
             Some(3) => self.dice.on_key(rc, d),
             Some(4) => self.life.on_key(rc, d),
+            Some(5) => self.qr.on_key(rc, d),
             _ => {}
         }
     }
 
+    #[inline(never)]
     pub fn tick<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) -> bool {
         match self.active {
             Some(0) => self.chip8.tick(d),
@@ -134,6 +145,7 @@ impl Misc {
             Some(2) => self.convert.tick(d),
             Some(3) => self.dice.tick(d),
             Some(4) => self.life.tick(d),
+            Some(5) => self.qr.tick(d),
             _ => false,
         }
     }
@@ -150,6 +162,7 @@ impl Misc {
             2 => self.convert.enter(d),
             3 => self.dice.enter(d),
             4 => self.life.enter(d),
+            5 => self.qr.enter(d),
             _ => {}
         }
     }

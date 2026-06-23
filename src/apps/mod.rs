@@ -19,6 +19,8 @@ pub mod misc;
 pub mod notes;
 pub mod player;
 pub mod pong;
+pub mod qr;
+pub mod qr_encode;
 pub mod repl;
 pub mod scales;
 pub mod settings;
