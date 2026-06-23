@@ -310,8 +310,10 @@ impl Dice {
         theme::fill(d, 0, theme::TOPBAR_Y + 16, theme::W as u32, (theme::HINT_Y - (theme::TOPBAR_Y + 16) - 2) as u32, theme::BG);
 
         // Two fields side by side: MIN (left) and MAX (right). The active one
-        // gets an accent card; the inactive a neutral one.
-        let fy = 36;
+        // gets an accent card; the inactive a neutral one. fy=46 keeps the MIN/MAX
+        // labels (drawn at fy-11) clear of the mode row above (which ends ~y31) —
+        // at the old fy=36 the "RANGE" label and the "MIN" label collided.
+        let fy = 46;
         let fw = 104u32;
         let fh = 26u32;
         let lx = 8;
@@ -326,10 +328,10 @@ impl Dice {
 
         let mut mb = [0u8; 8];
         let ms = fmt_u32(self.min, &mut mb);
-        theme::text(d, ms, lx + 8, fy + 8, &FONT_10X20, theme::FG);
+        theme::text(d, ms, lx + 8, fy + 4, &FONT_10X20, theme::FG);
         let mut xb = [0u8; 8];
         let xs = fmt_u32(self.max, &mut xb);
-        theme::text(d, xs, rx + 8, fy + 8, &FONT_10X20, theme::FG);
+        theme::text(d, xs, rx + 8, fy + 4, &FONT_10X20, theme::FG);
 
         // Result / error band.
         if self.range_err {

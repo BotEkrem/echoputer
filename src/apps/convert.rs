@@ -87,14 +87,16 @@ enum Field {
     Value,
 }
 
-// Layout: three stacked rows under the topbar, then the big result + hint.
-const ROW_FROM_Y: i32 = 26;
-const ROW_TO_Y: i32 = 50;
-const ROW_VAL_Y: i32 = 74;
-const ROW_H: u32 = 20;
+// Layout: a thin category band (y20-30) under the topbar, then three stacked rows,
+// then the big result, then the hint (HINT_Y = 123). Rows start at 31 so they clear
+// the category band — the original 26 overlapped it (the labels drew behind the cards).
+const ROW_FROM_Y: i32 = 31;
+const ROW_TO_Y: i32 = 51;
+const ROW_VAL_Y: i32 = 71;
+const ROW_H: u32 = 18;
 const LABEL_X: i32 = theme::PAD + 4;
 const FIELD_X: i32 = theme::PAD + 56;
-const RESULT_CY: i32 = 108;
+const RESULT_CY: i32 = 104;
 
 /// Max characters the user can type into the value field.
 const VAL_CAP: usize = 12;

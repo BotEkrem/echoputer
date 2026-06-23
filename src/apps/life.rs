@@ -230,8 +230,8 @@ impl Life {
         theme::hint(
             d,
             i18n::t(
-                "enter:pause s:step r:reseed",
-                "enter:dur s:adim r:yeniden",
+                "arrows+t edit  ENTER run  r rand  c clr",
+                "ok+t ciz  ENTER calis  r rast  c sil",
             ),
         );
     }
@@ -256,13 +256,18 @@ impl Life {
         self.cur = Some(Box::new([0u8; N_BYTES]));
         self.next = Some(Box::new([0u8; N_BYTES]));
         self.shown = Some(Box::new([0u8; N_BYTES]));
-        self.paused = false;
+        // Start PAUSED with a random seed: the sim doesn't run until you press ENTER,
+        // the edit cursor is visible (it only shows while paused), and you can clear
+        // ('c') to build from scratch or reseed ('r').
+        self.paused = true;
         self.showing_help = false;
         self.cx = COLS / 2;
         self.cy = ROWS / 2;
         self.prev_cx = self.cx;
         self.prev_cy = self.cy;
-        self.reseed();
+        // Start with an EMPTY board so you can place cells with the cursor (arrows + 't');
+        // 'r' drops a random seed, ENTER runs it. The grids are already zeroed above.
+        self.gen = 0;
         self.last_step = Instant::now();
 
         theme::clear(d);
@@ -344,6 +349,15 @@ impl Life {
                 self.draw_status(d);
             }
             Some(b't') => self.toggle_under_cursor(d),
+            Some(b'c') | Some(b'C') => {
+                // Clear the board to build a pattern from scratch.
+                if let Some(g) = self.cur.as_mut() {
+                    g.fill(0);
+                }
+                self.gen = 0;
+                let _ = self.draw_diff(d);
+                self.draw_status(d);
+            }
             _ => {}
         }
     }
