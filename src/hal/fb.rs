@@ -24,6 +24,7 @@ impl FrameBuf {
 
     /// Direct row-major access to the backing pixels. The emulator scaler writes
     /// whole scanlines this way (far cheaper than per-pixel `draw_iter`).
+    #[cfg(feature = "emu")]
     pub fn raw_mut(&mut self) -> &mut [Rgb565] {
         self.buf
     }

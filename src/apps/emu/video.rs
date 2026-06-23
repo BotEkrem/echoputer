@@ -12,7 +12,6 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 
 pub const GB_W: usize = 160;
-pub const GB_H: usize = 144;
 
 /// Scaled image geometry inside the 240x135 panel (full width, full height).
 pub const DST_W: usize = W; // stretch the full 240 px width
@@ -21,6 +20,7 @@ pub const X_OFF: usize = (W - DST_W) / 2; // 0
 
 /// Four-shade grey palette, index 0 = lightest (matches Peanut-GB's 2-bit output).
 /// A faint green tint nods to the original DMG LCD without hurting readability.
+#[cfg(not(feature = "emugbc"))]
 const SHADES: [Rgb565; 4] = [
     Rgb565::new(0x1D, 0x3D, 0x12), // lightest
     Rgb565::new(0x14, 0x2C, 0x0D),
@@ -37,6 +37,7 @@ pub fn dst_row(gb_line: u8) -> usize {
 /// Blit one GB scanline (160 palette indices in the low 2 bits) into `fb` at the
 /// scaled position. `fb` is the raw 240x135 row-major framebuffer. The horizontal
 /// downscale (160->150) is a cheap inline `dx*16/15` per pixel.
+#[cfg(not(feature = "emugbc"))]
 pub fn draw_line(fb: &mut [Rgb565], pixels: &[u8; GB_W], gb_line: u8) {
     let y = dst_row(gb_line);
     if y >= DST_H {

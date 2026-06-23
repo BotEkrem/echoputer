@@ -109,8 +109,6 @@ pub struct ServeState {
     pub hits: u32,
 }
 
-const ROOT: &str = "ECHO_ROOT"; // sentinel: path "" means the card root
-
 // ---- saved WiFi credentials (/ECHO/DATA/WIFI.BIN) ----------------------
 // Records are `ssid_len(1) | ssid | pw_len(1) | pw`, concatenated. Small + simple;
 // the file holds up to ~10 networks.
@@ -171,7 +169,7 @@ pub fn save_cred<D: BlockDevice, T: TimeSource>(vm: &VolumeManager<D, T>, ssid: 
     // Rebuild the record buffer: existing entries (minus any with this ssid) + the new one.
     let mut out = [0u8; CRED_BUF];
     let mut w = 0usize;
-    let mut put = |ssid: &[u8], pw: &[u8], out: &mut [u8], w: &mut usize| {
+    let put = |ssid: &[u8], pw: &[u8], out: &mut [u8], w: &mut usize| {
         if ssid.len() > 32 || pw.len() > 64 || *w + 2 + ssid.len() + pw.len() > out.len() {
             return;
         }
@@ -302,12 +300,6 @@ pub fn serve<D: BlockDevice, T: TimeSource>(
     sockets.get_mut::<tcp::Socket>(http_h).abort();
     st
 }
-
-type Net<'a, 'b> = (
-    &'a mut Interface,
-    &'a mut WifiPhy,
-    &'a mut SocketSet<'b>,
-);
 
 /// Read the request head (until CRLFCRLF), parse it, and dispatch. Streaming
 /// bodies (upload) read the rest straight off the socket.

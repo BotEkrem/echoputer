@@ -59,7 +59,7 @@ impl Entry {
 enum State {
     List,
     Playing,
-    Error(&'static str),
+    Error,
 }
 
 pub struct Emu {
@@ -140,7 +140,7 @@ impl Emu {
         d: &mut FrameBuf,
     ) -> bool {
         match self.state {
-            State::Playing | State::Error(_) => {
+            State::Playing | State::Error => {
                 self.stop(vm);
                 self.state = State::List;
                 self.draw_list(d);
@@ -192,7 +192,7 @@ impl Emu {
             State::Playing => {
                 self.pad.set(rc, pressed);
             }
-            State::Error(_) => {}
+            State::Error => {}
         }
     }
 
@@ -286,7 +286,7 @@ impl Emu {
             }
             Err(msg) => {
                 self.stop(vm);
-                self.state = State::Error(msg);
+                self.state = State::Error;
                 self.draw_error(d, msg);
             }
         }

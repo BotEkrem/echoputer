@@ -67,6 +67,7 @@ impl RomCache {
     }
 
     /// SD loads so far (self-test diagnostic).
+    #[cfg(feature = "emutest")]
     pub fn bank_loads(&self) -> u32 {
         self.sd_loads
     }
@@ -90,6 +91,7 @@ impl RomCache {
     }
 
     /// Point ROM reads at a flash-resident slice (boot self-test), bypassing SD.
+    #[cfg(feature = "emutest")]
     pub fn set_embedded(&mut self, rom: &'static [u8]) {
         self.embedded = Some(rom);
     }

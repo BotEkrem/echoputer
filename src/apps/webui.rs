@@ -175,10 +175,6 @@ impl WebUi {
         core::str::from_utf8(&self.pw[..self.pw_len]).unwrap_or("")
     }
 
-    pub fn auth(&self) -> &'static str {
-        self.aps[self.sel.min(MAX_APS - 1)].auth
-    }
-
     // ---- lifecycle --------------------------------------------------------
 
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
