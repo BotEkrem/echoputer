@@ -147,13 +147,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           SHORT="${GITHUB_SHA:0:7}"
-          # Re-run safety: drop this commit's release if it already exists, then make
+          # The releases page sorts by TAG NAME descending (not by date), so a bare
+          # short-SHA tag never lands the newest build on top. Lead the tag with a
+          # zero-padded, monotonic run number so lexicographic order == build order;
+          # the 'r' keeps it above any older bare-SHA (hex) tags during the changeover.
+          # run_number is stable across re-runs, so a re-run still replaces its release.
+          TAG="$(printf 'r%05d' "$GITHUB_RUN_NUMBER")-$SHORT"
+          # Re-run safety: drop this run's release if it already exists, then make
           # it fresh. Other commits' releases are untouched (history accumulates).
-          gh release delete "$SHORT" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release create "$SHORT" dist/*/*.bin \
+          gh release delete "$TAG" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release create "$TAG" dist/*/*.bin \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Build $SHORT — $(date -u +%Y-%m-%d)" \
+            --title "Build #$GITHUB_RUN_NUMBER ($SHORT) — $(date -u +%Y-%m-%d)" \
             --latest \
             --notes "Build of commit \`$SHORT\`. Download the \`.bin\` for the features you want (see the README's *Cargo features* table). Install it from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`."
 
