@@ -3,6 +3,8 @@
 //! so the rest of the firmware can keep using `crate::battery`, `crate::fb`, etc.
 
 pub mod battery;
+pub mod bmi270;
+pub mod bmi270_config;
 pub mod es8311;
 pub mod fb;
 pub mod ir;

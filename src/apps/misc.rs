@@ -1,13 +1,15 @@
 //! Misc — a sub-launcher grouping the small extra apps. Mirrors the Games launcher:
 //! the home menu opens this, picking an item runs it, and G0/Backspace returns to this
 //! list (a second press pops to the home menu). Items that touch the SD card take the
-//! volume manager through `on_key` / the leave paths.
+//! volume manager through `on_key` / the leave paths; the IMU apps (Level, Steps) take
+//! the shared I2C through `tick`.
 //!
 //! The Mic recorder is only present off the emugbc (colour) build — its I2S RX DMA
 //! buffer would shrink the tight CPU0 stack enough to overflow the Web UI there.
 
 use embedded_graphics::primitives::{PrimitiveStyle, Triangle};
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
+use embedded_hal::i2c::I2c;
 use embedded_sdmmc::{BlockDevice, TimeSource, VolumeManager};
 
 use crate::apps::calc::Calc;
@@ -15,16 +17,19 @@ use crate::apps::chip8::Chip8;
 use crate::apps::convert::Convert;
 use crate::apps::dice::Dice;
 use crate::apps::ir::Ir;
+use crate::apps::level::Level;
 use crate::apps::qr::Qr;
 #[cfg(not(feature = "emugbc"))]
 use crate::apps::recorder::Recorder;
+use crate::apps::stepcount::StepCount;
 use crate::hal::ir::IrTx;
 use crate::{i18n, theme};
 
+// Indices are stable across builds (Level=6, Steps=7); only Mic (8) is build-gated.
 #[cfg(not(feature = "emugbc"))]
-const ITEMS: [&str; 7] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Mic"];
+const ITEMS: [&str; 9] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Mic"];
 #[cfg(feature = "emugbc")]
-const ITEMS: [&str; 6] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR"];
+const ITEMS: [&str; 8] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps"];
 
 const TOP: i32 = 28;
 const ROW_H: i32 = 18;
@@ -40,6 +45,8 @@ pub struct Misc {
     dice: Dice,
     qr: Qr,
     ir: Ir,
+    level: Level,
+    stepcount: StepCount,
     #[cfg(not(feature = "emugbc"))]
     recorder: Recorder,
 }
@@ -56,6 +63,8 @@ impl Misc {
             dice: Dice::new(),
             qr: Qr::new(),
             ir: Ir::new(ir_tx),
+            level: Level::new(),
+            stepcount: StepCount::new(),
             #[cfg(not(feature = "emugbc"))]
             recorder: Recorder::new(),
         }
@@ -87,8 +96,10 @@ impl Misc {
             Some(3) => self.dice.exit(),
             Some(4) => self.qr.exit(),
             Some(5) => self.ir.exit(),
+            Some(6) => self.level.exit(),
+            Some(7) => self.stepcount.exit(),
             #[cfg(not(feature = "emugbc"))]
-            Some(6) => self.recorder.finalize(sd),
+            Some(8) => self.recorder.finalize(sd),
             _ => {}
         }
     }
@@ -120,7 +131,7 @@ impl Misc {
     /// fresh I2S RX audio and hands it to [`Misc::mic_feed`].
     #[cfg(not(feature = "emugbc"))]
     pub fn mic_armed(&self) -> bool {
-        self.active == Some(6) && self.recorder.is_recording()
+        self.active == Some(8) && self.recorder.is_recording()
     }
 
     /// Stream a chunk of captured PCM to the recorder (called by main while recording).
@@ -164,14 +175,18 @@ impl Misc {
             Some(3) => self.dice.on_key(rc, d),
             Some(4) => self.qr.on_key(rc, d),
             Some(5) => self.ir.on_key(rc, d),
+            Some(6) => self.level.on_key(rc, d),
+            Some(7) => self.stepcount.on_key(rc, d),
             #[cfg(not(feature = "emugbc"))]
-            Some(6) => self.recorder.on_key(rc, sd, d),
+            Some(8) => self.recorder.on_key(rc, sd, d),
             _ => {}
         }
     }
 
+    /// `i2c` is the shared internal bus; the IMU apps (Level, Steps) read the BMI270
+    /// through it here. The others ignore it.
     #[inline(never)]
-    pub fn tick<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) -> bool {
+    pub fn tick<I: I2c, D: DrawTarget<Color = Rgb565>>(&mut self, i2c: &mut I, d: &mut D) -> bool {
         match self.active {
             Some(0) => self.chip8.tick(d),
             Some(1) => self.calc.tick(d),
@@ -179,8 +194,10 @@ impl Misc {
             Some(3) => self.dice.tick(d),
             Some(4) => self.qr.tick(d),
             Some(5) => self.ir.tick(d),
+            Some(6) => self.level.tick(i2c, d),
+            Some(7) => self.stepcount.tick(i2c, d),
             #[cfg(not(feature = "emugbc"))]
-            Some(6) => self.recorder.tick(d),
+            Some(8) => self.recorder.tick(d),
             _ => false,
         }
     }
@@ -191,7 +208,6 @@ impl Misc {
         sd: &VolumeManager<D, T>,
         d: &mut impl DrawTarget<Color = Rgb565>,
     ) {
-        let _ = sd; // used by Chip-8 (ROM load); the rest ignore it
         match i {
             0 => self.chip8.enter(sd, d),
             1 => self.calc.enter(d),
@@ -199,8 +215,10 @@ impl Misc {
             3 => self.dice.enter(d),
             4 => self.qr.enter(d),
             5 => self.ir.enter(d),
+            6 => self.level.enter(d),
+            7 => self.stepcount.enter(d),
             #[cfg(not(feature = "emugbc"))]
-            6 => self.recorder.enter(d),
+            8 => self.recorder.enter(d),
             _ => {}
         }
     }

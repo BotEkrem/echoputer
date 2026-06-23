@@ -33,7 +33,7 @@ use crate::apps::{
     browser, charge, games, hacking, menu, misc, notes, player, repl, scales, settings, splash, stopwatch, synth,
     sysinfo, ui, webui,
 };
-use crate::hal::{battery, es8311, fb, ir, tca8418, ws2812};
+use crate::hal::{battery, bmi270, es8311, fb, ir, tca8418, ws2812};
 use crate::radio::portal;
 
 use esp_backtrace as _;
@@ -376,6 +376,8 @@ fn main() -> ! {
     #[cfg(not(feature = "emugbc"))]
     let _ = es8311::enable_adc(&mut i2c);
     let kbd_ok = tca8418::init(&mut i2c).is_ok();
+    // BMI270 IMU (Misc Level + Step counter): probe + upload its 8 KB config blob.
+    let _ = bmi270::init(&mut i2c);
 
     // ---------------- I2S audio out ----------------
     // The GBC build (Walnut-CGB) needs the RAM the larger colour core eats, so it
@@ -1412,7 +1414,7 @@ fn main() -> ! {
                     }
                 }
                 Screen::Games => dirty |= games.tick(&mut fbuf),
-                Screen::Misc => dirty |= misc.tick(&mut fbuf),
+                Screen::Misc => dirty |= misc.tick(&mut i2c, &mut fbuf),
                 Screen::Player => dirty |= player.tick(&mut fbuf),
                 Screen::Stopwatch => dirty |= stopwatch.tick(&mut fbuf),
                 Screen::Sysinfo => dirty |= sysinfo.tick(&mut fbuf),
