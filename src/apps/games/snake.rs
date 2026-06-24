@@ -11,6 +11,7 @@ use embedded_graphics::{mono_font::ascii::FONT_10X20, pixelcolor::Rgb565, prelud
 use esp_hal::time::{Duration, Instant};
 
 use crate::{i18n, theme};
+use crate::i18n::snake;
 
 // ---- grid geometry (cells are square; the board is an integer number of them) ----
 const CELL: i32 = 6;
@@ -166,7 +167,7 @@ impl Snake {
         let s = fmt_u16(self.score, &mut buf);
         // erase previous value (battery occupies the far right ~52px)
         theme::fill(d, 70, 3, 90, 13, theme::BG);
-        theme::text(d, i18n::t("SCORE", "SKOR"), 74, 4, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(snake::SCORE), 74, 4, theme::BODY_FONT, theme::MUTED);
         theme::text(d, s, 74 + 6 * 6, 4, theme::BODY_FONT, theme::accent());
     }
 
@@ -186,11 +187,11 @@ impl Snake {
         let cy = BOARD_TOP + BOARD_H / 2;
         // a calm card behind the text so the snake doesn't bleed through
         theme::card(d, 36, cy - 30, (theme::W - 72) as u32, 56, Some(theme::accent()));
-        theme::text_center(d, i18n::t("GAME OVER", "OYUN BITTI"), theme::W / 2, cy - 12, &FONT_10X20, theme::FG);
+        theme::text_center(d, i18n::t(snake::GAME_OVER), theme::W / 2, cy - 12, &FONT_10X20, theme::FG);
         let mut buf = [0u8; 16];
         let s = fmt_score_line(self.score, &mut buf);
         theme::text_center(d, s, theme::W / 2, cy + 8, theme::BODY_FONT, theme::accent());
-        theme::hint(d, i18n::t("any key: play again", "herhangi tus: tekrar"));
+        theme::hint(d, i18n::t(snake::PLAY_AGAIN));
     }
 
     // ---- public interface (called by main.rs) ----
@@ -198,9 +199,9 @@ impl Snake {
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.reset();
         theme::clear(d);
-        theme::topbar(d, i18n::t("Snake", "Snake"));
+        theme::topbar(d, i18n::t(snake::SNAKE));
         self.draw_board(d);
-        theme::hint(d, i18n::t("arrows: steer", "oklar: yon ver"));
+        theme::hint(d, i18n::t(snake::ARROWS_STEER));
     }
 
     pub fn on_key<D: DrawTarget<Color = Rgb565>>(&mut self, rc: (u8, u8), d: &mut D) {
@@ -211,9 +212,9 @@ impl Snake {
             // Any key restarts a fresh game.
             self.reset();
             theme::clear(d);
-            theme::topbar(d, i18n::t("Snake", "Snake"));
+            theme::topbar(d, i18n::t(snake::SNAKE));
             self.draw_board(d);
-            theme::hint(d, i18n::t("arrows: steer", "oklar: yon ver"));
+            theme::hint(d, i18n::t(snake::ARROWS_STEER));
             return;
         }
 
@@ -334,7 +335,7 @@ fn fmt_u16(v: u16, buf: &mut [u8; 8]) -> &str {
 
 /// "score: N" on the game-over card (ASCII only, bilingual prefix).
 fn fmt_score_line(v: u16, buf: &mut [u8; 16]) -> &str {
-    let prefix = i18n::t("score ", "skor ").as_bytes();
+    let prefix = i18n::t(snake::SCORE_PREFIX).as_bytes();
     let mut j = 0;
     for &b in prefix {
         if j < buf.len() {

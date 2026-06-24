@@ -16,6 +16,7 @@ use embedded_graphics::{mono_font::ascii::FONT_10X20, pixelcolor::Rgb565, prelud
 use esp_hal::time::Instant;
 
 use crate::{hal::keymap, i18n, theme};
+use crate::i18n::dice;
 
 /// 'r' key (row1 col4 on the silkscreen) — re-roll convenience in DICE mode.
 const K_R: (u8, u8) = (1, 4);
@@ -226,7 +227,7 @@ impl Dice {
 
     fn draw_all(&mut self, d: &mut impl DrawTarget<Color = Rgb565>) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Dice", "Zar"));
+        theme::topbar(d, i18n::t(dice::DICE_TITLE));
         // Mode label on the row under the topbar.
         self.draw_mode_row(d);
         match self.mode {
@@ -238,13 +239,13 @@ impl Dice {
     fn draw_mode_row(&self, d: &mut impl DrawTarget<Color = Rgb565>) {
         theme::fill(d, 0, theme::TOPBAR_Y + 3, theme::W as u32, 12, theme::BG);
         let label = match self.mode {
-            Mode::Dice => i18n::t("DICE", "ZAR"),
-            Mode::Range => i18n::t("RANGE", "ARALIK"),
+            Mode::Dice => i18n::t(dice::DICE_MODE),
+            Mode::Range => i18n::t(dice::RANGE_MODE),
         };
         theme::text(d, label, theme::PAD, theme::TOPBAR_Y + 4, theme::BODY_FONT, theme::MUTED);
         theme::text_right(
             d,
-            i18n::t("<> mode", "<> mod"),
+            i18n::t(dice::MODE_SWITCH),
             theme::W - theme::PAD,
             theme::TOPBAR_Y + 4,
             theme::BODY_FONT,
@@ -266,9 +267,9 @@ impl Dice {
         if self.rolled {
             if self.is_coin() {
                 let s = if self.result == 1 {
-                    i18n::t("HEADS", "YAZI")
+                    i18n::t(dice::HEADS)
                 } else {
-                    i18n::t("TAILS", "TURA")
+                    i18n::t(dice::TAILS)
                 };
                 theme::text_center(d, s, theme::W / 2, BIG_CY, &FONT_10X20, theme::accent());
                 let uw = s.len() as i32 * 11;
@@ -284,13 +285,13 @@ impl Dice {
             theme::text_center(d, "--", theme::W / 2, BIG_CY, &FONT_10X20, theme::FAINT);
         }
 
-        theme::hint(d, i18n::t("up/dn pick  Enter roll  <> mode", "yuk/asa sec  Enter at  <> mod"));
+        theme::hint(d, i18n::t(dice::DICE_HINT));
     }
 
     /// "d6", "d100", or "COIN" for the current selection.
     fn preset_name<'a>(&self, buf: &'a mut [u8; 8]) -> &'a str {
         if self.is_coin() {
-            return i18n::t("COIN", "PARA");
+            return i18n::t(dice::COIN);
         }
         buf[0] = b'd';
         let mut tail = [0u8; 8];
@@ -323,8 +324,8 @@ impl Dice {
         theme::card(d, lx, fy, fw, fh, if min_active { Some(theme::accent()) } else { None });
         theme::card(d, rx, fy, fw, fh, if !min_active { Some(theme::accent()) } else { None });
 
-        theme::text(d, i18n::t("MIN", "ALT"), lx + 6, fy - 11, theme::BODY_FONT, theme::MUTED);
-        theme::text(d, i18n::t("MAX", "UST"), rx + 6, fy - 11, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(dice::MIN), lx + 6, fy - 11, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(dice::MAX), rx + 6, fy - 11, theme::BODY_FONT, theme::MUTED);
 
         let mut mb = [0u8; 8];
         let ms = fmt_u32(self.min, &mut mb);
@@ -337,7 +338,7 @@ impl Dice {
         if self.range_err {
             theme::text_center(
                 d,
-                i18n::t("min > max", "alt > ust"),
+                i18n::t(dice::MIN_GT_MAX),
                 theme::W / 2,
                 BIG_CY + 14,
                 theme::BODY_FONT,
@@ -353,7 +354,7 @@ impl Dice {
             theme::text_center(d, "--", theme::W / 2, BIG_CY + 14, &FONT_10X20, theme::FAINT);
         }
 
-        theme::hint(d, i18n::t("type digits  Tab field  Enter roll", "rakam yaz  Tab alan  Enter at"));
+        theme::hint(d, i18n::t(dice::RANGE_HINT));
     }
 }
 

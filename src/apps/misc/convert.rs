@@ -12,6 +12,7 @@
 use embedded_graphics::{mono_font::ascii::FONT_10X20, pixelcolor::Rgb565, prelude::*};
 
 use crate::{i18n, theme};
+use crate::i18n::convert;
 
 /// A unit within a (non-temperature) category: a display label + its factor to
 /// the category's base unit (value_in_base = value * factor).
@@ -34,10 +35,10 @@ const CATS: [Cat; 4] = [Cat::Length, Cat::Mass, Cat::Temp, Cat::Data];
 impl Cat {
     fn name(self) -> &'static str {
         match self {
-            Cat::Length => i18n::t("Length", "Uzunluk"),
-            Cat::Mass => i18n::t("Mass", "Kutle"),
-            Cat::Temp => i18n::t("Temperature", "Sicaklik"),
-            Cat::Data => i18n::t("Data", "Veri"),
+            Cat::Length => i18n::t(convert::LENGTH),
+            Cat::Mass => i18n::t(convert::MASS),
+            Cat::Temp => i18n::t(convert::TEMPERATURE),
+            Cat::Data => i18n::t(convert::DATA),
         }
     }
 
@@ -240,7 +241,7 @@ impl Convert {
         self.field = Field::Value;
         self.reset_for_cat();
         theme::clear(d);
-        theme::topbar(d, i18n::t("Convert", "Cevir"));
+        theme::topbar(d, i18n::t(convert::CONVERT));
         self.draw_all(d);
     }
 
@@ -296,8 +297,8 @@ impl Convert {
         theme::text_right(d, cs, theme::W - theme::PAD, theme::TOPBAR_Y + 3, theme::BODY_FONT, theme::FAINT);
 
         let units = self.cat_kind().units();
-        self.draw_row(d, ROW_FROM_Y, i18n::t("From", "Birim1"), units[self.from].label, self.field == Field::From);
-        self.draw_row(d, ROW_TO_Y, i18n::t("To", "Birim2"), units[self.to].label, self.field == Field::To);
+        self.draw_row(d, ROW_FROM_Y, i18n::t(convert::FROM), units[self.from].label, self.field == Field::From);
+        self.draw_row(d, ROW_TO_Y, i18n::t(convert::TO), units[self.to].label, self.field == Field::To);
         self.draw_value_row(d);
         self.draw_result(d);
         self.draw_hint(d);
@@ -322,7 +323,7 @@ impl Convert {
         let y = ROW_VAL_Y;
         theme::fill(d, 0, y - 1, theme::W as u32, ROW_H + 2, theme::BG);
         theme::card(d, theme::PAD, y, (theme::W - 2 * theme::PAD) as u32, ROW_H, if sel { Some(theme::accent()) } else { None });
-        theme::text(d, i18n::t("Value", "Deger"), LABEL_X, y + 5, theme::BODY_FONT, theme::FAINT);
+        theme::text(d, i18n::t(convert::VALUE), LABEL_X, y + 5, theme::BODY_FONT, theme::FAINT);
         let s = if self.val_len == 0 { "0" } else { self.val_str() };
         let col = if sel { theme::FG } else { theme::MUTED };
         theme::text(d, s, FIELD_X, y + 4, theme::TITLE_FONT, col);
@@ -345,8 +346,8 @@ impl Convert {
 
     fn draw_hint<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
         let s = match self.field {
-            Field::Value => i18n::t("type value  up/dn field  <> category", "deger yaz  yuk/asa alan  <> kategori"),
-            _ => i18n::t("<> unit  up/dn field", "<> birim  yuk/asa alan"),
+            Field::Value => i18n::t(convert::HINT_VALUE),
+            _ => i18n::t(convert::HINT_UNIT),
         };
         theme::hint(d, s);
     }

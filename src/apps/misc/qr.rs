@@ -11,6 +11,7 @@ use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 
 use crate::apps::misc::qr_encode::Qr as QrCode;
 use crate::hal::keymap;
+use crate::i18n::qr;
 use crate::{i18n, theme};
 
 const CAP: usize = 160; // max input chars (comfortably inside QR version 10 @ ECC M)
@@ -91,14 +92,14 @@ impl Qr {
             Some(code) => self.draw_matrix(d, code),
             None => {
                 let msg = if self.err {
-                    i18n::t("too long for a QR", "QR icin cok uzun")
+                    i18n::t(qr::TOO_LONG)
                 } else {
-                    i18n::t("type text, ENTER = generate", "metin yaz, ENTER = uret")
+                    i18n::t(qr::TYPE_TO_GENERATE)
                 };
                 theme::text(d, msg, theme::PAD, AREA_Y + 30, theme::BODY_FONT, theme::MUTED);
             }
         }
-        theme::hint(d, i18n::t("type  bksp del  ENTER make  ` back", "yaz  bksp sil  ENTER uret  ` geri"));
+        theme::hint(d, i18n::t(qr::HINT));
     }
 
     /// Draw the QR dark-on-white with a quiet zone, scaled to fit the area.

@@ -7,6 +7,7 @@ use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 
 use crate::hal::ir::{IrTx, PRESETS};
 use crate::hal::keymap;
+use crate::i18n::ir;
 use crate::{i18n, theme};
 
 const CUSTOM: usize = PRESETS.len(); // row index of the "Custom" entry (last row)
@@ -98,7 +99,7 @@ impl Ir {
                 let mut hb = [0u8; 8];
                 hex8(self.custom, &mut hb);
                 let hs = core::str::from_utf8(&hb).unwrap_or("00000000");
-                theme::text(d, i18n::t("Custom", "Ozel"), theme::PAD + 16, y, theme::TITLE_FONT, col);
+                theme::text(d, i18n::t(ir::CUSTOM), theme::PAD + 16, y, theme::TITLE_FONT, col);
                 theme::text(d, hs, theme::PAD + 86, y + 1, theme::BODY_FONT, if selected { theme::FG } else { theme::FAINT });
             } else {
                 theme::text(d, PRESETS[i].0, theme::PAD + 16, y, theme::TITLE_FONT, col);
@@ -106,14 +107,14 @@ impl Ir {
         }
         // Confirmation + aim hint.
         if self.last_sent {
-            theme::text_center(d, i18n::t("sent", "gonderildi"), theme::W / 2, 100, theme::BODY_FONT, theme::accent());
+            theme::text_center(d, i18n::t(ir::SENT), theme::W / 2, 100, theme::BODY_FONT, theme::accent());
         } else {
-            theme::text_center(d, i18n::t("aim the top edge at the device", "ust kenari cihaza dogrult"), theme::W / 2, 100, theme::BODY_FONT, theme::FAINT);
+            theme::text_center(d, i18n::t(ir::AIM_HINT), theme::W / 2, 100, theme::BODY_FONT, theme::FAINT);
         }
         let hint = if self.sel == CUSTOM {
-            i18n::t("type hex  bksp  ENTER send  ` back", "hex yaz  bksp  ENTER gonder  ` geri")
+            i18n::t(ir::CUSTOM_HINT)
         } else {
-            i18n::t("UP/DN pick  ENTER send  ` back", "YUK/AS sec  ENTER gonder  ` geri")
+            i18n::t(ir::PICK_HINT)
         };
         theme::hint(d, hint);
     }

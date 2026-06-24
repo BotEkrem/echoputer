@@ -35,6 +35,7 @@ use crate::apps::misc::qr::Qr;
 use crate::apps::misc::recorder::Recorder;
 use crate::apps::misc::stepcount::StepCount;
 use crate::hal::ir::IrTx;
+use crate::i18n::misc;
 use crate::{i18n, theme};
 
 // Indices are stable across builds (Level=6, Steps=7); only Mic (8) is build-gated.
@@ -237,7 +238,7 @@ impl Misc {
 
     fn draw_list<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Misc", "Diger"));
+        theme::topbar(d, i18n::t(misc::MISC));
         let n = ITEMS.len();
         for row in 0..VISIBLE {
             let i = self.scroll + row;
@@ -264,6 +265,6 @@ impl Misc {
                 .into_styled(st)
                 .draw(d);
         }
-        theme::hint(d, i18n::t("UP/DN pick  ENTER open  ` menu", "YUK/AS sec  ENTER ac  ` menu"));
+        theme::hint(d, i18n::t(misc::LIST_HINT));
     }
 }

@@ -35,6 +35,7 @@ use crate::apps::{
     sysinfo, ui, webui,
 };
 use crate::hal::{battery, bmi270, es8311, fb, ir, tca8418, ws2812};
+use crate::i18n::app;
 use crate::radio::portal;
 
 use esp_backtrace as _;
@@ -909,7 +910,7 @@ fn main() -> ! {
                         if !ok {
                             webui.draw_status(
                                 &mut fbuf,
-                                webui::Phase::Failed(i18n::t("connect failed", "baglanti yok")),
+                                webui::Phase::Failed(i18n::t(app::CONNECT_FAILED)),
                             );
                         } else if wifi_connect_only {
                             // came from the Internet item -> stay connected, go home.
@@ -1021,7 +1022,7 @@ fn main() -> ! {
                         hacking::Action::Run(tool) => match tool {
                             hacking::Tool::WifiScan | hacking::Tool::WifiAnalyze => {
                                 let bt = tool.name();
-                                hacking.draw_busy(&mut fbuf, bt, i18n::t("Scanning...", "Taraniyor..."));
+                                hacking.draw_busy(&mut fbuf, bt, i18n::t(app::SCANNING));
                                 blit!();
                                 match radio.scan() {
                                     Some(aps) => {
@@ -1040,7 +1041,7 @@ fn main() -> ! {
                             }
                             hacking::Tool::BleScan => {
                                 let bt = hacking::Tool::BleScan.name();
-                                hacking.draw_busy(&mut fbuf, bt, i18n::t("Scanning BLE...", "BLE taraniyor..."));
+                                hacking.draw_busy(&mut fbuf, bt, i18n::t(app::SCANNING_BLE));
                                 blit!();
                                 match radio.ble_scan() {
                                     Some(devs) => {
@@ -1055,7 +1056,7 @@ fn main() -> ! {
                             }
                             hacking::Tool::Detector => {
                                 let bt = hacking::Tool::Detector.name();
-                                hacking.draw_busy(&mut fbuf, bt, i18n::t("Listening...", "Dinleniyor..."));
+                                hacking.draw_busy(&mut fbuf, bt, i18n::t(app::LISTENING));
                                 blit!();
                                 match radio.detect() {
                                     Some(r) => hacking.set_detector_results(r.deauth, r.disassoc, r.beacon, r.frames),
@@ -1077,7 +1078,7 @@ fn main() -> ! {
                                     hacking::NameSrc::RandomTr => hacking::SPAM_SSIDS_TR.iter().copied().collect(),
                                     hacking::NameSrc::Custom => owned.iter().map(|s| s.as_str()).collect(),
                                 };
-                                run_attack!(i18n::t("beacons", "beacon"), |tick| radio.beacon_spam(&names, 6, tick));
+                                run_attack!(i18n::t(app::BEACONS), |tick| radio.beacon_spam(&names, 6, tick));
                             }
                             hacking::Tool::ProbeFlood => {
                                 let (pbuf, plen) = hacking.prefix_owned();
@@ -1093,7 +1094,7 @@ fn main() -> ! {
                                     hacking::NameSrc::RandomTr => hacking::SPAM_SSIDS_TR.iter().copied().collect(),
                                     hacking::NameSrc::Custom => owned.iter().map(|s| s.as_str()).collect(),
                                 };
-                                run_attack!(i18n::t("probes", "probe"), |tick| radio.probe_flood(&names, 6, tick));
+                                run_attack!(i18n::t(app::PROBES), |tick| radio.probe_flood(&names, 6, tick));
                             }
                             // These reach the radio via ScanTargets / Portal / BleSpam below.
                             hacking::Tool::Deauth
@@ -1105,7 +1106,7 @@ fn main() -> ! {
                         },
                         hacking::Action::ScanTargets => {
                             let bt = hacking.attack_title();
-                            hacking.draw_busy(&mut fbuf, bt, i18n::t("Scanning...", "Taraniyor..."));
+                            hacking.draw_busy(&mut fbuf, bt, i18n::t(app::SCANNING));
                             blit!();
                             match radio.scan() {
                                 Some(aps) => {
@@ -1120,13 +1121,13 @@ fn main() -> ! {
                         }
                         hacking::Action::Deauth => {
                             if let Some((bssid, ch)) = hacking.target() {
-                                run_attack!(i18n::t("frames", "cerceve"), |tick| radio.deauth(bssid, ch, tick));
+                                run_attack!(i18n::t(app::FRAMES), |tick| radio.deauth(bssid, ch, tick));
                             }
                         }
                         hacking::Action::EvilTwin => {
                             if let Some((ssid_buf, ssid_len, ch)) = hacking.target_ssid_owned() {
                                 let ssid = core::str::from_utf8(&ssid_buf[..ssid_len]).unwrap_or("");
-                                run_attack!(i18n::t("beacons", "beacon"), |tick| radio.beacon_spam(&[ssid], ch, tick));
+                                run_attack!(i18n::t(app::BEACONS), |tick| radio.beacon_spam(&[ssid], ch, tick));
                             }
                         }
                         hacking::Action::Handshake => {
@@ -1171,7 +1172,7 @@ fn main() -> ! {
                                 let ssid = core::str::from_utf8(&ssid_buf[..ssid_len]).unwrap_or("");
                                 hacking.set_running();
                                 let bt = hacking::Tool::NetScan.name();
-                                hacking.draw_busy(&mut fbuf, bt, i18n::t("Joining...", "Baglaniyor..."));
+                                hacking.draw_busy(&mut fbuf, bt, i18n::t(app::JOINING));
                                 blit!();
                                 let mut last = Instant::now();
                                 let res = radio.run_netscan(ssid, |st| {
@@ -1199,7 +1200,7 @@ fn main() -> ! {
                             }
                         }
                         hacking::Action::BleSpam(mode) => {
-                            run_attack!(i18n::t("adverts", "reklam"), |tick| radio.ble_spam(mode, tick));
+                            run_attack!(i18n::t(app::ADVERTS), |tick| radio.ble_spam(mode, tick));
                         }
                         hacking::Action::Redraw | hacking::Action::None => {}
                     }

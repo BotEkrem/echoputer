@@ -14,6 +14,7 @@
 use embedded_graphics::{mono_font::ascii::FONT_10X20, pixelcolor::Rgb565, prelude::*};
 
 use crate::{hal::keymap, i18n, theme};
+use crate::i18n::calc;
 
 /// Max characters the user can type into one entry (digits + sign + dot).
 const ENTRY_CAP: usize = 15;
@@ -201,11 +202,11 @@ impl Calc {
     pub fn enter(&mut self, d: &mut impl DrawTarget<Color = Rgb565>) {
         self.clear_all();
         theme::clear(d);
-        theme::topbar(d, i18n::t("Calculator", "Hesap Makinesi"));
+        theme::topbar(d, i18n::t(calc::TITLE));
         self.draw_body(d);
         theme::hint(
             d,
-            i18n::t("digits + - x /   ENTER = result   bksp  c clr", "rakam + - x /   ENTER = sonuc   bksp  c sil"),
+            i18n::t(calc::HINT),
         );
     }
 
@@ -294,7 +295,7 @@ impl Calc {
     fn draw_result(&self, d: &mut impl DrawTarget<Color = Rgb565>) {
         let mut buf = [0u8; 24];
         let (s, col): (&str, Rgb565) = if self.error {
-            (i18n::t("err", "hata"), theme::DESTRUCTIVE)
+            (i18n::t(calc::ERR), theme::DESTRUCTIVE)
         } else if !self.fresh && self.entry_len > 0 {
             (self.entry_str(), theme::FG)
         } else {

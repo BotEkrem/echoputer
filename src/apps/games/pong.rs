@@ -13,6 +13,7 @@ use embedded_graphics::{mono_font::ascii::FONT_10X20, pixelcolor::Rgb565, prelud
 use esp_hal::time::{Duration, Instant};
 
 use crate::{i18n, theme};
+use crate::i18n::pong;
 
 // ---- playfield: the band between the topbar divider and the hint line ----
 const FIELD_TOP: f32 = 20.0;
@@ -213,15 +214,15 @@ impl Pong {
         let cy = FIELD_TOP as i32 + FIELD_H as i32 / 2;
         theme::card(d, 36, cy - 30, (theme::W - 72) as u32, 56, Some(theme::accent()));
         let title = if player_won {
-            i18n::t("YOU WIN", "KAZANDIN")
+            i18n::t(pong::YOU_WIN)
         } else {
-            i18n::t("AI WINS", "AI KAZANDI")
+            i18n::t(pong::AI_WINS)
         };
         theme::text_center(d, title, theme::W / 2, cy - 12, &FONT_10X20, theme::FG);
         let mut buf = [0u8; 12];
         let line = fmt_score_line(self.p_score, self.ai_score, &mut buf);
         theme::text_center(d, line, theme::W / 2, cy + 8, theme::BODY_FONT, theme::accent());
-        theme::hint(d, i18n::t("any key: play again", "herhangi tus: tekrar"));
+        theme::hint(d, i18n::t(pong::PLAY_AGAIN));
     }
 
     // ---- public interface (called by main.rs) ----
@@ -229,9 +230,9 @@ impl Pong {
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.reset();
         theme::clear(d);
-        theme::topbar(d, i18n::t("Pong", "Pong"));
+        theme::topbar(d, i18n::t(pong::PONG));
         self.draw_board(d);
-        theme::hint(d, i18n::t("up/down: move  enter: serve", "yukari/asagi  enter: servis"));
+        theme::hint(d, i18n::t(pong::MOVE_SERVE));
     }
 
     pub fn on_key<D: DrawTarget<Color = Rgb565>>(&mut self, rc: (u8, u8), d: &mut D) {
@@ -242,9 +243,9 @@ impl Pong {
             // Any key restarts a fresh match.
             self.reset();
             theme::clear(d);
-            theme::topbar(d, i18n::t("Pong", "Pong"));
+            theme::topbar(d, i18n::t(pong::PONG));
             self.draw_board(d);
-            theme::hint(d, i18n::t("up/down: move  enter: serve", "yukari/asagi  enter: servis"));
+            theme::hint(d, i18n::t(pong::MOVE_SERVE));
             return;
         }
 

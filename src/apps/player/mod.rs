@@ -19,6 +19,7 @@ mod wav;
 mod mp3;
 
 use crate::hal::fb::FrameBuf;
+use crate::i18n::player;
 use crate::{i18n, theme};
 use alloc::boxed::Box;
 use embedded_sdmmc::{
@@ -691,10 +692,10 @@ impl Player {
 
     fn draw_list(&self, d: &mut FrameBuf) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Player", "Oynatici"));
+        theme::topbar(d, i18n::t(player::PLAYER));
         if self.count == 0 {
-            theme::text(d, i18n::t("No audio in /ECHO/MUSIC/", "/ECHO/MUSIC/ bos"), PAD, TOP + 6, BODY_FONT, MUTED);
-            theme::text(d, i18n::t("Copy .wav / .mp3 files there", ".wav / .mp3 dosyalari koy"), PAD, TOP + 22, BODY_FONT, theme::FAINT);
+            theme::text(d, i18n::t(player::NO_AUDIO), PAD, TOP + 6, BODY_FONT, MUTED);
+            theme::text(d, i18n::t(player::COPY_FILES), PAD, TOP + 22, BODY_FONT, theme::FAINT);
         } else {
             let end = (self.scroll + VISIBLE).min(self.count);
             for (row, i) in (self.scroll..end).enumerate() {
@@ -707,12 +708,12 @@ impl Player {
                 theme::text(d, self.tracks[i].disp_str(), PAD + 12, y, BODY_FONT, col);
             }
         }
-        theme::hint(d, i18n::t("UP/DN pick  ENTER play  ` menu", "YUK/AS sec  ENTER cal  ` menu"));
+        theme::hint(d, i18n::t(player::LIST_HINT));
     }
 
     fn draw_playing(&self, d: &mut FrameBuf) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Player", "Oynatici"));
+        theme::topbar(d, i18n::t(player::PLAYER));
         let entry = &self.tracks[self.track_idx];
         // track name (clips at the screen edge if very long)
         theme::text(d, entry.disp_str(), PAD, TOP + 2, BODY_FONT, FG);
@@ -721,9 +722,9 @@ impl Player {
 
         // state line
         let st = if self.playing {
-            i18n::t("PLAYING", "CALIYOR")
+            i18n::t(player::PLAYING)
         } else {
-            i18n::t("PAUSED", "DURAKLADI")
+            i18n::t(player::PAUSED)
         };
         theme::text(d, st, PAD, TOP + 20, BODY_FONT, if self.playing { theme::accent() } else { MUTED });
 
@@ -740,17 +741,17 @@ impl Player {
         let vn = fmt_vol(&mut vb, self.volume);
         theme::text_right(d, core::str::from_utf8(&vb[..vn]).unwrap_or(""), W - PAD, TOP + 52, BODY_FONT, MUTED);
 
-        theme::hint(d, i18n::t("ENT play/pause <>seek ^v vol []trk", "ENT cal/dur <>sar ^v ses []parca"));
+        theme::hint(d, i18n::t(player::PLAYING_HINT));
     }
 
     fn draw_error(&self, d: &mut FrameBuf, msg: &str) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Player", "Oynatici"));
+        theme::topbar(d, i18n::t(player::PLAYER));
         theme::text(d, msg, PAD, TOP + 10, theme::TITLE_FONT, FG);
         let hint = if msg == "low memory" {
-            i18n::t("ENTER: reboot to free memory   ` menu", "ENTER: bellek icin reboot   ` menu")
+            i18n::t(player::REBOOT_HINT)
         } else {
-            i18n::t("` menu", "` menu")
+            i18n::t(player::MENU_HINT)
         };
         theme::hint(d, hint);
     }

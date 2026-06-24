@@ -9,6 +9,7 @@
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 
 use crate::hal::keymap;
+use crate::i18n::webui;
 use crate::{i18n, theme};
 
 const MAX_APS: usize = 24;
@@ -297,7 +298,7 @@ impl WebUi {
         theme::topbar(d, "Web UI");
         theme::text_center(
             d,
-            i18n::t("scanning WiFi...", "WiFi taraniyor..."),
+            i18n::t(webui::SCANNING_WIFI),
             theme::W / 2,
             theme::H / 2,
             theme::TITLE_FONT,
@@ -307,23 +308,23 @@ impl WebUi {
 
     fn draw_list<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Pick a network", "Bir ag sec"));
+        theme::topbar(d, i18n::t(webui::PICK_NETWORK));
         if self.scan_failed {
             theme::text_center(
                 d,
-                i18n::t("WiFi unavailable", "WiFi kullanilamiyor"),
+                i18n::t(webui::WIFI_UNAVAILABLE),
                 theme::W / 2,
                 theme::H / 2,
                 theme::BODY_FONT,
                 theme::DESTRUCTIVE,
             );
-            theme::hint(d, i18n::t("G0 back", "G0 geri"));
+            theme::hint(d, i18n::t(webui::G0_BACK));
             return;
         }
         if self.ap_count == 0 {
             theme::text_center(
                 d,
-                i18n::t("no networks found", "ag bulunamadi"),
+                i18n::t(webui::NO_NETWORKS),
                 theme::W / 2,
                 theme::H / 2,
                 theme::BODY_FONT,
@@ -342,7 +343,7 @@ impl WebUi {
                     theme::fill(d, theme::PAD - 2, y - 2, (theme::W - 2 * theme::PAD + 4) as u32, 15, theme::SURFACE2);
                 }
                 let name: alloc::string::String = if ap.ssid_len == 0 {
-                    alloc::string::String::from(i18n::t("<hidden>", "<gizli>"))
+                    alloc::string::String::from(i18n::t(webui::HIDDEN))
                 } else {
                     core::str::from_utf8(&ap.ssid[..ap.ssid_len as usize])
                         .unwrap_or("?")
@@ -360,8 +361,8 @@ impl WebUi {
         let hint = alloc::format!(
             "{} {}   ENTER {}   G0",
             self.ap_count,
-            i18n::t("nets", "ag"),
-            i18n::t("connect", "baglan")
+            i18n::t(webui::NETS),
+            i18n::t(webui::CONNECT)
         );
         theme::hint(d, &hint);
     }
@@ -384,7 +385,7 @@ impl WebUi {
             theme::BODY_FONT,
             theme::MUTED,
         );
-        theme::hint(d, i18n::t("type  bksp del  ENTER connect  G0 back", "yaz  bksp sil  ENTER baglan  G0 geri"));
+        theme::hint(d, i18n::t(webui::PASSWORD_HINT));
     }
 
     fn ssid_titled(&self) -> &str {
@@ -407,18 +408,18 @@ impl WebUi {
             Phase::Connecting => {
                 theme::text_center(
                     d,
-                    i18n::t("connecting...", "baglaniliyor..."),
+                    i18n::t(webui::CONNECTING),
                     theme::W / 2,
                     theme::H / 2,
                     theme::BODY_FONT,
                     theme::MUTED,
                 );
-                theme::hint(d, i18n::t("G0 cancel", "G0 iptal"));
+                theme::hint(d, i18n::t(webui::G0_CANCEL));
             }
             Phase::Serving { ip, hits } => {
                 theme::text_center(
                     d,
-                    i18n::t("Dashboard live at", "Panel yayinda:"),
+                    i18n::t(webui::DASHBOARD_LIVE),
                     theme::W / 2,
                     40,
                     theme::BODY_FONT,
@@ -426,14 +427,14 @@ impl WebUi {
                 );
                 let url = alloc::format!("http://{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
                 theme::text_center(d, &url, theme::W / 2, 62, theme::TITLE_FONT, theme::accent());
-                let reqs = alloc::format!("{} {}", hits, i18n::t("requests", "istek"));
+                let reqs = alloc::format!("{} {}", hits, i18n::t(webui::REQUESTS));
                 theme::text_center(d, &reqs, theme::W / 2, 88, theme::BODY_FONT, theme::MUTED);
-                theme::hint(d, i18n::t("open it on a PC on this WiFi   G0 stop", "ayni WiFi'deki PC'den ac   G0 durdur"));
+                theme::hint(d, i18n::t(webui::OPEN_ON_PC));
             }
             Phase::Failed(msg) => {
-                theme::text_center(d, i18n::t("connection failed", "baglanti basarisiz"), theme::W / 2, 46, theme::BODY_FONT, theme::DESTRUCTIVE);
+                theme::text_center(d, i18n::t(webui::CONNECTION_FAILED), theme::W / 2, 46, theme::BODY_FONT, theme::DESTRUCTIVE);
                 theme::text_center(d, msg, theme::W / 2, 68, theme::BODY_FONT, theme::MUTED);
-                theme::hint(d, i18n::t("G0 back", "G0 geri"));
+                theme::hint(d, i18n::t(webui::G0_BACK));
             }
         }
     }

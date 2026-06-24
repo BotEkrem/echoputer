@@ -12,6 +12,7 @@ use embedded_graphics::{mono_font::ascii::FONT_10X20, pixelcolor::Rgb565, prelud
 use esp_hal::time::Instant;
 
 use crate::{i18n, theme};
+use crate::i18n::stopwatch;
 
 /// 'r' key (row1 col4 on the silkscreen) — reset. Documented in the hint line.
 const K_RESET: (u8, u8) = (1, 4);
@@ -31,8 +32,8 @@ enum Mode {
 impl Mode {
     fn name(self) -> &'static str {
         match self {
-            Mode::Stopwatch => i18n::t("STOPWATCH", "KRONOMETRE"),
-            Mode::Timer => i18n::t("TIMER", "GERI SAYIM"),
+            Mode::Stopwatch => i18n::t(stopwatch::STOPWATCH_UPPER),
+            Mode::Timer => i18n::t(stopwatch::TIMER_UPPER),
         }
     }
 }
@@ -99,7 +100,7 @@ impl Stopwatch {
 
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Stopwatch", "Kronometre"));
+        theme::topbar(d, i18n::t(stopwatch::STOPWATCH));
         self.last_shown_ms = u64::MAX; // force the value redraw below
         self.draw_mode(d);
         self.draw_value(d);
@@ -180,11 +181,11 @@ impl Stopwatch {
         theme::text(d, self.mode.name(), theme::PAD, theme::TOPBAR_Y + 4, theme::BODY_FONT, theme::MUTED);
         // Run/idle state on the right of the same row.
         let (label, col) = if self.done {
-            (i18n::t("DONE", "BITTI"), theme::accent())
+            (i18n::t(stopwatch::DONE), theme::accent())
         } else if self.running() {
-            (i18n::t("RUNNING", "CALISIYOR"), theme::accent())
+            (i18n::t(stopwatch::RUNNING), theme::accent())
         } else {
-            (i18n::t("PAUSED", "DURDU"), theme::FAINT)
+            (i18n::t(stopwatch::PAUSED), theme::FAINT)
         };
         theme::text_right(d, label, theme::W - theme::PAD, theme::TOPBAR_Y + 4, theme::BODY_FONT, col);
     }
@@ -218,12 +219,9 @@ impl Stopwatch {
     fn draw_hint<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
         let s = if self.mode == Mode::Timer && !self.running() {
             // paused TIMER: surface the +/-10 s adjust keys
-            i18n::t(
-                "Enter run  <> mode  up/dn +-10s  r reset",
-                "Enter calis  <> mod  yuk/asa +-10s  r sifir",
-            )
+            i18n::t(stopwatch::HINT_TIMER_PAUSED)
         } else {
-            i18n::t("Enter run/pause  <> mode  r reset", "Enter calis/dur  <> mod  r sifir")
+            i18n::t(stopwatch::HINT_DEFAULT)
         };
         theme::hint(d, s);
     }

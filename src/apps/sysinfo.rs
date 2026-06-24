@@ -13,6 +13,7 @@ use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 use esp_hal::time::{Duration, Instant};
 
 use crate::hal::battery;
+use crate::i18n::sysinfo;
 use crate::{i18n, theme};
 
 /// First row baseline; rows step down by [`ROW`].
@@ -85,7 +86,7 @@ impl Sysinfo {
 
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("System", "Sistem"));
+        theme::topbar(d, i18n::t(sysinfo::SYSTEM));
 
         // Labels are static — paint them once here.
         for (i, &row) in ROWS.iter().enumerate() {
@@ -98,7 +99,7 @@ impl Sysinfo {
             self.draw_value(d, i, row);
         }
 
-        theme::hint(d, i18n::t("live    ` menu", "canli    ` menu"));
+        theme::hint(d, i18n::t(sysinfo::LIVE_MENU));
     }
 
     /// No interactive controls — the screen is read-only. main.rs owns the home
@@ -139,12 +140,12 @@ impl Sysinfo {
 
 fn label_for(row: Row) -> &'static str {
     match row {
-        Row::Chip => i18n::t("Chip", "Yonga"),
-        Row::Cores => i18n::t("Cores", "Cekirdek"),
-        Row::Heap => i18n::t("Heap free", "Yigin bos"),
-        Row::HeapUse => i18n::t("Heap used", "Yigin dolu"),
-        Row::Uptime => i18n::t("Uptime", "Calisma"),
-        Row::Battery => i18n::t("Battery", "Pil"),
+        Row::Chip => i18n::t(sysinfo::CHIP),
+        Row::Cores => i18n::t(sysinfo::CORES),
+        Row::Heap => i18n::t(sysinfo::HEAP_FREE),
+        Row::HeapUse => i18n::t(sysinfo::HEAP_USED),
+        Row::Uptime => i18n::t(sysinfo::UPTIME),
+        Row::Battery => i18n::t(sysinfo::BATTERY),
         Row::Mac => "MAC",
     }
 }
@@ -166,7 +167,7 @@ fn value_for(row: Row, boot: Instant) -> String {
         Row::Uptime => fmt_uptime(boot.elapsed().as_secs()),
         Row::Battery => {
             if !battery::present() {
-                String::from(i18n::t("USB power", "USB guc"))
+                String::from(i18n::t(sysinfo::USB_POWER))
             } else {
                 format!("{}%", battery::level())
             }

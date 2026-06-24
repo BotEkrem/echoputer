@@ -9,6 +9,7 @@ use embedded_graphics::{
 };
 
 use crate::hal::battery;
+use crate::i18n::charge;
 use crate::{i18n, theme};
 
 const BX: i32 = 45;
@@ -21,7 +22,7 @@ const BH: i32 = 50;
 pub fn draw(d: &mut impl DrawTarget<Color = Rgb565>, clear: bool) {
     if clear {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Charge", "Sarj"));
+        theme::topbar(d, i18n::t(charge::CHARGE));
         // static battery body + terminal nub
         let _ = Rectangle::new(Point::new(BX, BY), Size::new(BW as u32, BH as u32))
             .into_styled(PrimitiveStyle::with_stroke(theme::MUTED, 2))
@@ -34,8 +35,8 @@ pub fn draw(d: &mut impl DrawTarget<Color = Rgb565>, clear: bool) {
     theme::fill(d, 0, BY + BH + 8, theme::W as u32, (theme::H - (BY + BH + 8)) as u32, theme::BG);
 
     if !battery::present() {
-        theme::text_center(d, i18n::t("No battery", "Pil yok"), theme::W / 2, BY + BH / 2, &FONT_10X20, theme::MUTED);
-        theme::text_center(d, i18n::t("running on USB power", "USB ile calisiyor"), theme::W / 2, BY + BH + 22, theme::BODY_FONT, theme::FAINT);
+        theme::text_center(d, i18n::t(charge::NO_BATTERY), theme::W / 2, BY + BH / 2, &FONT_10X20, theme::MUTED);
+        theme::text_center(d, i18n::t(charge::RUNNING_ON_USB), theme::W / 2, BY + BH + 22, theme::BODY_FONT, theme::FAINT);
         return;
     }
 
@@ -49,7 +50,7 @@ pub fn draw(d: &mut impl DrawTarget<Color = Rgb565>, clear: bool) {
     let mut nb = [0u8; 5];
     let s = pct_str(lvl, &mut nb);
     theme::text_center(d, s, theme::W / 2, BY + BH + 22, &FONT_10X20, theme::FG);
-    theme::text_center(d, i18n::t("keep device on to charge", "sarj icin acik tutun"), theme::W / 2, BY + BH + 40, theme::BODY_FONT, theme::FAINT);
+    theme::text_center(d, i18n::t(charge::KEEP_DEVICE_ON), theme::W / 2, BY + BH + 40, theme::BODY_FONT, theme::FAINT);
 }
 
 fn pct_str(v: u8, buf: &mut [u8; 5]) -> &str {

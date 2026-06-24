@@ -8,6 +8,7 @@ use embedded_graphics::{
 };
 
 use crate::i18n;
+use crate::i18n::menu;
 use crate::palette;
 use crate::theme;
 
@@ -60,36 +61,36 @@ fn app_name(k: AppKind) -> &'static str {
         AppKind::Hacking => "Hacking",
         AppKind::Repl => "REPL",
         AppKind::Synth => "Synthwave",
-        AppKind::Games => i18n::t("Games", "Oyunlar"),
+        AppKind::Games => i18n::t(menu::GAMES),
         AppKind::WebUi => "Web UI",
-        AppKind::Player => i18n::t("Player", "Oynatici"),
-        AppKind::Browser => i18n::t("File Browser", "Dosya Tarayici"),
-        AppKind::Stopwatch => i18n::t("Stopwatch", "Kronometre"),
-        AppKind::Notes => i18n::t("Notes", "Notlar"),
-        AppKind::Misc => i18n::t("Misc", "Diger"),
-        AppKind::Charge => i18n::t("Charge", "Sarj"),
-        AppKind::Settings => i18n::t("Settings", "Ayarlar"),
-        AppKind::Sysinfo => i18n::t("System", "Sistem"),
+        AppKind::Player => i18n::t(menu::PLAYER),
+        AppKind::Browser => i18n::t(menu::FILE_BROWSER),
+        AppKind::Stopwatch => i18n::t(menu::STOPWATCH),
+        AppKind::Notes => i18n::t(menu::NOTES),
+        AppKind::Misc => i18n::t(menu::MISC),
+        AppKind::Charge => i18n::t(menu::CHARGE),
+        AppKind::Settings => i18n::t(menu::SETTINGS),
+        AppKind::Sysinfo => i18n::t(menu::SYSTEM),
         AppKind::Internet => "Internet",
     }
 }
 
 fn app_sub(k: AppKind) -> &'static str {
     match k {
-        AppKind::Hacking => i18n::t("WiFi/BLE recon + attacks", "WiFi/BLE kesif + saldiri"),
-        AppKind::Repl => i18n::t("interactive scripting shell", "etkilesimli betik kabugu"),
-        AppKind::Synth => i18n::t("melodic keyboard synth", "melodik klavye synth"),
-        AppKind::Games => i18n::t("Snake, 2048, Tetris, Pong", "Snake, 2048, Tetris, Pong"),
-        AppKind::WebUi => i18n::t("WiFi file + system dashboard", "WiFi dosya + sistem paneli"),
-        AppKind::Player => i18n::t("WAV / MP3 audio player", "WAV / MP3 ses oynatici"),
-        AppKind::Browser => i18n::t("browse + manage SD", "SD gez + yonet"),
-        AppKind::Stopwatch => i18n::t("stopwatch + timer", "kronometre + zamanlayici"),
-        AppKind::Notes => i18n::t("text notes on SD", "SD'de metin notlari"),
-        AppKind::Misc => i18n::t("Chip-8 + small extras", "Chip-8 + kucuk ekstralar"),
-        AppKind::Charge => i18n::t("battery status / charging", "pil durumu / sarj"),
-        AppKind::Settings => i18n::t("theme + app preferences", "tema + uygulama ayarlari"),
-        AppKind::Sysinfo => i18n::t("device info + stats", "cihaz bilgi + durum"),
-        AppKind::Internet => i18n::t("connect / disconnect WiFi", "internete baglan / kes"),
+        AppKind::Hacking => i18n::t(menu::HACKING_SUB),
+        AppKind::Repl => i18n::t(menu::REPL_SUB),
+        AppKind::Synth => i18n::t(menu::SYNTH_SUB),
+        AppKind::Games => i18n::t(menu::GAMES_SUB),
+        AppKind::WebUi => i18n::t(menu::WEBUI_SUB),
+        AppKind::Player => i18n::t(menu::PLAYER_SUB),
+        AppKind::Browser => i18n::t(menu::BROWSER_SUB),
+        AppKind::Stopwatch => i18n::t(menu::STOPWATCH_SUB),
+        AppKind::Notes => i18n::t(menu::NOTES_SUB),
+        AppKind::Misc => i18n::t(menu::MISC_SUB),
+        AppKind::Charge => i18n::t(menu::CHARGE_SUB),
+        AppKind::Settings => i18n::t(menu::SETTINGS_SUB),
+        AppKind::Sysinfo => i18n::t(menu::SYSINFO_SUB),
+        AppKind::Internet => i18n::t(menu::INTERNET_SUB),
     }
 }
 

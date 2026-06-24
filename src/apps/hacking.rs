@@ -17,6 +17,7 @@ use crate::apps::wiki;
 use crate::hal::keymap;
 use crate::radio::{ble_spam, netscan, portal};
 use crate::i18n;
+use crate::i18n::hacking;
 use crate::theme;
 
 pub const MAX_APS: usize = 64;
@@ -90,9 +91,9 @@ pub enum Diff {
 impl Diff {
     fn label(self) -> &'static str {
         match self {
-            Diff::Basic => i18n::t("BASIC", "TEMEL"),
-            Diff::Inter => i18n::t("INTERMEDIATE", "ORTA"),
-            Diff::Adv => i18n::t("ADVANCED", "ILERI"),
+            Diff::Basic => i18n::t(hacking::BASIC),
+            Diff::Inter => i18n::t(hacking::INTERMEDIATE),
+            Diff::Adv => i18n::t(hacking::ADVANCED),
         }
     }
     fn color(self) -> Rgb565 {
@@ -107,18 +108,18 @@ impl Diff {
 impl Tool {
     pub fn name(self) -> &'static str {
         match self {
-            Tool::WifiScan => i18n::t("WiFi Scanner", "WiFi Tarayici"),
-            Tool::WifiAnalyze => i18n::t("WiFi Analyzer", "WiFi Analiz"),
-            Tool::BleScan => i18n::t("BLE Scanner", "BLE Tarayici"),
-            Tool::Detector => i18n::t("Deauth Detector", "Deauth Dedektor"),
-            Tool::Deauth => i18n::t("Deauth Flood", "Deauth Seli"),
-            Tool::BeaconSpam => i18n::t("Beacon Spam", "Beacon Spam"),
-            Tool::ProbeFlood => i18n::t("Probe Flood", "Probe Seli"),
-            Tool::EvilTwin => i18n::t("Evil Twin", "Evil Twin"),
-            Tool::Handshake => i18n::t("Handshake Capture", "Handshake Yakalama"),
-            Tool::EvilPortal => i18n::t("Evil Portal", "Evil Portal"),
-            Tool::NetScan => i18n::t("LAN Scan", "LAN Tarama"),
-            Tool::BleSpam => i18n::t("BLE Spam", "BLE Spam"),
+            Tool::WifiScan => i18n::t(hacking::WIFI_SCANNER),
+            Tool::WifiAnalyze => i18n::t(hacking::WIFI_ANALYZER),
+            Tool::BleScan => i18n::t(hacking::BLE_SCANNER),
+            Tool::Detector => i18n::t(hacking::DEAUTH_DETECTOR),
+            Tool::Deauth => i18n::t(hacking::DEAUTH_FLOOD),
+            Tool::BeaconSpam => i18n::t(hacking::BEACON_SPAM),
+            Tool::ProbeFlood => i18n::t(hacking::PROBE_FLOOD),
+            Tool::EvilTwin => i18n::t(hacking::EVIL_TWIN),
+            Tool::Handshake => i18n::t(hacking::HANDSHAKE_CAPTURE),
+            Tool::EvilPortal => i18n::t(hacking::EVIL_PORTAL),
+            Tool::NetScan => i18n::t(hacking::LAN_SCAN),
+            Tool::BleSpam => i18n::t(hacking::BLE_SPAM),
         }
     }
     fn difficulty(self) -> Diff {
@@ -136,18 +137,18 @@ impl Tool {
     }
     fn target_title(self) -> &'static str {
         match self {
-            Tool::EvilTwin => i18n::t("Evil Twin: pick AP", "Evil Twin: AP sec"),
-            Tool::Handshake => i18n::t("Handshake: pick AP", "Handshake: AP sec"),
-            Tool::NetScan => i18n::t("LAN Scan: pick open AP", "LAN Scan: acik AP sec"),
-            _ => i18n::t("Deauth: pick target", "Deauth: hedef sec"),
+            Tool::EvilTwin => i18n::t(hacking::EVIL_TWIN_PICK_AP),
+            Tool::Handshake => i18n::t(hacking::HANDSHAKE_PICK_AP),
+            Tool::NetScan => i18n::t(hacking::LAN_SCAN_PICK_AP),
+            _ => i18n::t(hacking::DEAUTH_PICK_TARGET),
         }
     }
     fn target_verb(self) -> &'static str {
         match self {
-            Tool::EvilTwin => i18n::t("clone", "klonla"),
-            Tool::Handshake => i18n::t("capture", "yakala"),
-            Tool::NetScan => i18n::t("scan", "tara"),
-            _ => i18n::t("deauth", "deauth"),
+            Tool::EvilTwin => i18n::t(hacking::CLONE),
+            Tool::Handshake => i18n::t(hacking::CAPTURE_VERB),
+            Tool::NetScan => i18n::t(hacking::SCAN_VERB),
+            _ => i18n::t(hacking::DEAUTH_VERB),
         }
     }
 }
@@ -185,9 +186,9 @@ pub enum NameSrc {
 impl NameSrc {
     fn label(self) -> &'static str {
         match self {
-            NameSrc::RandomEn => i18n::t("Random EN", "Rastgele EN"),
-            NameSrc::RandomTr => i18n::t("Random TR", "Rastgele TR"),
-            NameSrc::Custom => i18n::t("Custom", "Ozel"),
+            NameSrc::RandomEn => i18n::t(hacking::RANDOM_EN),
+            NameSrc::RandomTr => i18n::t(hacking::RANDOM_TR),
+            NameSrc::Custom => i18n::t(hacking::CUSTOM),
         }
     }
 }
@@ -856,7 +857,7 @@ impl Hacking {
         theme::clear(d);
         theme::topbar(d, title);
         theme::text_center(d, msg, theme::W / 2, theme::H / 2 - 6, theme::TITLE_FONT, theme::accent());
-        theme::text_center(d, i18n::t("please wait", "lutfen bekleyin"), theme::W / 2, theme::H / 2 + 10, theme::BODY_FONT, theme::MUTED);
+        theme::text_center(d, i18n::t(hacking::PLEASE_WAIT), theme::W / 2, theme::H / 2 + 10, theme::BODY_FONT, theme::MUTED);
     }
 
     pub fn draw<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, clear: bool) {
@@ -915,7 +916,7 @@ impl Hacking {
                 }
             }
         }
-        theme::hint(d, i18n::t("ENTER open   G0 back", "ENTER ac   G0 geri"));
+        theme::hint(d, i18n::t(hacking::ENTER_OPEN_BACK));
     }
 
     fn draw_detail<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, clear: bool) {
@@ -926,14 +927,14 @@ impl Hacking {
             let diff = self.pending.difficulty();
             theme::text(d, diff.label(), theme::PAD, 20, theme::BODY_FONT, diff.color());
             if self.pending.offensive() {
-                theme::text_right(d, i18n::t("ATTACK", "SALDIRI"), theme::W - theme::PAD, 20, theme::BODY_FONT, theme::DESTRUCTIVE);
+                theme::text_right(d, i18n::t(hacking::ATTACK), theme::W - theme::PAD, 20, theme::BODY_FONT, theme::DESTRUCTIVE);
             }
         }
         let opts = self.detail_opts();
         let labels = [
-            i18n::t("Use tool", "Araci kullan"),
-            i18n::t("Wiki", "Wiki"),
-            i18n::t("Settings", "Ayarlar"),
+            i18n::t(hacking::USE_TOOL),
+            i18n::t(hacking::WIKI),
+            i18n::t(hacking::SETTINGS),
         ];
         for i in 0..opts {
             let y = 40 + i as i32 * 22;
@@ -948,7 +949,7 @@ impl Hacking {
                 theme::text_right(d, ">", theme::W - theme::PAD - 8, y + 5, theme::TITLE_FONT, theme::accent());
             }
         }
-        theme::hint(d, i18n::t("ENTER select   G0 back", "ENTER sec   G0 geri"));
+        theme::hint(d, i18n::t(hacking::ENTER_SELECT_BACK));
     }
 
     fn draw_wiki<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
@@ -963,14 +964,14 @@ impl Hacking {
         if self.wiki_scroll + WIKI_VISIBLE < total {
             theme::text_right(d, "v", theme::W - theme::PAD, theme::HINT_Y - 14, theme::BODY_FONT, theme::accent());
         }
-        theme::hint(d, i18n::t("up/down scroll   G0 back", "yukari/asagi kaydir   G0 geri"));
+        theme::hint(d, i18n::t(hacking::SCROLL_BACK));
     }
 
     fn draw_cfg<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, clear: bool) {
         if clear {
             theme::clear(d);
             theme::topbar(d, self.pending.name());
-            theme::text(d, i18n::t("Settings", "Ayarlar"), theme::PAD, 20, theme::BODY_FONT, theme::accent());
+            theme::text(d, i18n::t(hacking::SETTINGS), theme::PAD, 20, theme::BODY_FONT, theme::accent());
         }
         let rows = cfg_rows(self.pending);
         for (i, row) in rows.iter().enumerate() {
@@ -987,20 +988,20 @@ impl Hacking {
             theme::text(d, label, theme::PAD + 9, y + 2, theme::BODY_FONT, lc);
             theme::text_right(d, value, theme::W - theme::PAD - 8, y + 2, theme::BODY_FONT, vc);
         }
-        theme::hint(d, i18n::t("left/right change   ENTER edit   G0 back", "sol/sag degistir   ENTER duzenle   G0 geri"));
+        theme::hint(d, i18n::t(hacking::CFG_CHANGE_EDIT_BACK));
     }
 
     /// (label, value) for a settings row. Value strings borrow self's buffers.
     fn cfg_row_text(&self, row: CfgRow) -> (&str, &str) {
         match row {
-            CfgRow::NameSrc => (i18n::t("Name source", "Isim kaynagi"), self.cfg.name_src.label()),
+            CfgRow::NameSrc => (i18n::t(hacking::NAME_SOURCE), self.cfg.name_src.label()),
             CfgRow::CustomName => (
-                i18n::t("Custom name", "Ozel isim"),
+                i18n::t(hacking::CUSTOM_NAME),
                 core::str::from_utf8(&self.cfg.prefix[..self.cfg.prefix_len]).unwrap_or("?"),
             ),
-            CfgRow::BleMode => (i18n::t("Mode", "Mod"), self.ble_mode().label()),
+            CfgRow::BleMode => (i18n::t(hacking::MODE), self.ble_mode().label()),
             CfgRow::PortalName => (
-                i18n::t("AP name", "AP adi"),
+                i18n::t(hacking::AP_NAME),
                 core::str::from_utf8(&self.cfg.portal[..self.cfg.portal_len]).unwrap_or("?"),
             ),
         }
@@ -1010,11 +1011,11 @@ impl Hacking {
         theme::clear(d);
         let (title, buf): (&str, &str) = match self.edit {
             Edit::Prefix => (
-                i18n::t("Custom SSID name", "Ozel SSID adi"),
+                i18n::t(hacking::CUSTOM_SSID_NAME),
                 core::str::from_utf8(&self.cfg.prefix[..self.cfg.prefix_len]).unwrap_or(""),
             ),
             Edit::Portal => (
-                i18n::t("Portal AP name", "Portal AP adi"),
+                i18n::t(hacking::PORTAL_AP_NAME),
                 core::str::from_utf8(&self.cfg.portal[..self.cfg.portal_len]).unwrap_or(""),
             ),
         };
@@ -1026,9 +1027,9 @@ impl Hacking {
         // caps indicator in the box's right edge (the "Aa" key toggles it)
         theme::text_right(d, if self.caps { "ABC" } else { "abc" }, theme::W - theme::PAD - 6, 51, theme::BODY_FONT, theme::MUTED);
         if matches!(self.edit, Edit::Prefix) {
-            theme::text_center(d, i18n::t("becomes NAME001, NAME002 ...", "NAME001, NAME002 ... olur"), theme::W / 2, 78, theme::BODY_FONT, theme::MUTED);
+            theme::text_center(d, i18n::t(hacking::BECOMES_NAME), theme::W / 2, 78, theme::BODY_FONT, theme::MUTED);
         }
-        theme::hint(d, i18n::t("type   bksp delete   ENTER ok   G0 cancel", "yaz   bksp sil   ENTER tamam   G0 iptal"));
+        theme::hint(d, i18n::t(hacking::TYPE_BKSP_OK_CANCEL));
     }
 
     fn draw_confirm<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, clear: bool) {
@@ -1037,9 +1038,9 @@ impl Hacking {
         }
         theme::topbar(d, self.pending.name());
         theme::fill(d, 0, 20, theme::W as u32, (theme::HINT_Y - 22) as u32, theme::BG);
-        theme::text_center(d, i18n::t("ACTIVE ATTACK", "AKTIF SALDIRI"), theme::W / 2, 44, theme::TITLE_FONT, theme::DESTRUCTIVE);
+        theme::text_center(d, i18n::t(hacking::ACTIVE_ATTACK), theme::W / 2, 44, theme::TITLE_FONT, theme::DESTRUCTIVE);
         theme::text_center(d, self.pending.name(), theme::W / 2, 66, theme::BODY_FONT, theme::MUTED);
-        theme::hint(d, i18n::t("ENTER start   G0 cancel", "ENTER baslat   G0 iptal"));
+        theme::hint(d, i18n::t(hacking::ENTER_START_CANCEL));
     }
 
     fn draw_aplist<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, clear: bool, title: &str, select: bool) {
@@ -1054,7 +1055,7 @@ impl Hacking {
             return;
         }
         if self.ap_count == 0 {
-            theme::text_center(d, i18n::t("no networks found", "ag bulunamadi"), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
+            theme::text_center(d, i18n::t(hacking::NO_NETWORKS_FOUND), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
         } else {
             for row in 0..ROW_VISIBLE {
                 let idx = self.scroll + row;
@@ -1068,7 +1069,7 @@ impl Hacking {
                     theme::fill(d, theme::PAD - 2, y - 2, (theme::W - 2 * theme::PAD + 4) as u32, 15, theme::SURFACE2);
                 }
                 let name: alloc::string::String = if ap.ssid_len == 0 {
-                    alloc::string::String::from(i18n::t("<hidden>", "<gizli>"))
+                    alloc::string::String::from(i18n::t(hacking::HIDDEN))
                 } else {
                     core::str::from_utf8(&ap.ssid[..ap.ssid_len as usize]).unwrap_or("?").chars().take(15).collect()
                 };
@@ -1079,10 +1080,10 @@ impl Hacking {
             }
         }
         if select {
-            let h = alloc::format!("{} {}   G0", i18n::t("ENTER", "ENTER"), self.pending.target_verb());
+            let h = alloc::format!("{} {}   G0", i18n::t(hacking::ENTER), self.pending.target_verb());
             theme::hint(d, &h);
         } else {
-            let hint = alloc::format!("{} {}   ENTER {}   G0", self.ap_count, i18n::t("nets", "ag"), i18n::t("rescan", "tekrar"));
+            let hint = alloc::format!("{} {}   ENTER {}   G0", self.ap_count, i18n::t(hacking::NETS), i18n::t(hacking::RESCAN));
             theme::hint(d, &hint);
         }
     }
@@ -1124,7 +1125,7 @@ impl Hacking {
             theme::text(d, &lbl, x, base_y + 3, theme::BODY_FONT, lcol);
         }
         theme::hline(d, base_y + 1, theme::BORDER);
-        let hint = alloc::format!("{} {}   ENTER {}   G0", self.ap_count, i18n::t("nets", "ag"), i18n::t("rescan", "tekrar"));
+        let hint = alloc::format!("{} {}   ENTER {}   G0", self.ap_count, i18n::t(hacking::NETS), i18n::t(hacking::RESCAN));
         theme::hint(d, &hint);
     }
 
@@ -1140,7 +1141,7 @@ impl Hacking {
             return;
         }
         if self.ble_count == 0 {
-            theme::text_center(d, i18n::t("no devices found", "cihaz bulunamadi"), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
+            theme::text_center(d, i18n::t(hacking::NO_DEVICES_FOUND), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
         } else {
             for row in 0..ROW_VISIBLE {
                 let idx = self.scroll + row;
@@ -1160,7 +1161,7 @@ impl Hacking {
                 theme::text_right(d, &info, theme::W - theme::PAD, y, theme::BODY_FONT, theme::MUTED);
             }
         }
-        let hint = alloc::format!("{} {}   ENTER {}   G0", self.ble_count, i18n::t("dev", "cihaz"), i18n::t("rescan", "tekrar"));
+        let hint = alloc::format!("{} {}   ENTER {}   G0", self.ble_count, i18n::t(hacking::DEV), i18n::t(hacking::RESCAN));
         theme::hint(d, &hint);
     }
 
@@ -1178,9 +1179,9 @@ impl Hacking {
         let det = self.det;
         let attack = det.deauth + det.disassoc;
         if attack >= 3 {
-            theme::text_center(d, i18n::t("! DEAUTH ATTACK !", "! DEAUTH SALDIRISI !"), theme::W / 2, 34, theme::TITLE_FONT, theme::DESTRUCTIVE);
+            theme::text_center(d, i18n::t(hacking::DEAUTH_ATTACK_ALERT), theme::W / 2, 34, theme::TITLE_FONT, theme::DESTRUCTIVE);
         } else {
-            theme::text_center(d, i18n::t("clear", "temiz"), theme::W / 2, 34, theme::TITLE_FONT, theme::accent());
+            theme::text_center(d, i18n::t(hacking::CLEAR), theme::W / 2, 34, theme::TITLE_FONT, theme::accent());
         }
         let rows = [
             ("deauth", det.deauth, det.deauth > 0),
@@ -1195,7 +1196,7 @@ impl Hacking {
             let v = alloc::format!("{}", val);
             theme::text_right(d, &v, theme::W - theme::PAD - 10, y, theme::BODY_FONT, col);
         }
-        theme::hint(d, i18n::t("ENTER re-listen   G0 back", "ENTER tekrar dinle   G0 geri"));
+        theme::hint(d, i18n::t(hacking::ENTER_RELISTEN_BACK));
     }
 
     fn draw_done<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, clear: bool) {
@@ -1211,38 +1212,38 @@ impl Hacking {
         if matches!(self.pending, Tool::Handshake) {
             let got = self.attack_sent >= 2;
             let (verdict, col) = if got {
-                (i18n::t("handshake captured", "handshake yakalandi"), theme::accent())
+                (i18n::t(hacking::HANDSHAKE_CAPTURED), theme::accent())
             } else {
-                (i18n::t("no handshake", "handshake yok"), theme::MUTED)
+                (i18n::t(hacking::NO_HANDSHAKE), theme::MUTED)
             };
             theme::text_center(d, verdict, theme::W / 2, 40, theme::TITLE_FONT, col);
             let line = alloc::format!("{} EAPOL", self.attack_sent);
             theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
         } else if matches!(self.pending, Tool::EvilPortal) {
-            theme::text_center(d, i18n::t("portal stopped", "portal durdu"), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
-            let line = alloc::format!("{} {}", self.attack_sent, i18n::t("credentials captured", "kimlik yakalandi"));
+            theme::text_center(d, i18n::t(hacking::PORTAL_STOPPED), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
+            let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::CREDENTIALS_CAPTURED));
             theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
         } else if matches!(self.pending, Tool::NetScan) {
-            theme::text_center(d, i18n::t("scan done", "tarama bitti"), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
-            let line = alloc::format!("{} {}", self.attack_sent, i18n::t("open ports", "acik port"));
+            theme::text_center(d, i18n::t(hacking::SCAN_DONE), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
+            let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::OPEN_PORTS));
             theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
         } else {
-            theme::text_center(d, i18n::t("stopped", "durdu"), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
+            theme::text_center(d, i18n::t(hacking::STOPPED), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
             let unit = if matches!(self.pending, Tool::BleSpam) {
-                i18n::t("adverts", "reklam")
+                i18n::t(hacking::ADVERTS)
             } else {
-                i18n::t("frames", "cerceve")
+                i18n::t(hacking::FRAMES)
             };
             let line = alloc::format!("{} {}", self.attack_sent, unit);
             theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
         }
-        theme::hint(d, i18n::t("ENTER run again   G0 back", "ENTER tekrar   G0 geri"));
+        theme::hint(d, i18n::t(hacking::ENTER_RUN_AGAIN_BACK));
     }
 
     fn draw_failed<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
-        theme::text_center(d, i18n::t("radio error", "radyo hatasi"), theme::W / 2, theme::H / 2 - 6, theme::TITLE_FONT, theme::DESTRUCTIVE);
-        theme::text_center(d, i18n::t("ENTER to retry", "ENTER tekrar dene"), theme::W / 2, theme::H / 2 + 10, theme::BODY_FONT, theme::MUTED);
-        theme::hint(d, i18n::t("ENTER retry   G0 back", "ENTER tekrar   G0 geri"));
+        theme::text_center(d, i18n::t(hacking::RADIO_ERROR), theme::W / 2, theme::H / 2 - 6, theme::TITLE_FONT, theme::DESTRUCTIVE);
+        theme::text_center(d, i18n::t(hacking::ENTER_TO_RETRY), theme::W / 2, theme::H / 2 + 10, theme::BODY_FONT, theme::MUTED);
+        theme::hint(d, i18n::t(hacking::ENTER_RETRY_BACK));
     }
 }
 
@@ -1252,10 +1253,10 @@ const WIKI_VISIBLE: usize = 8;
 pub fn draw_running<D: DrawTarget<Color = Rgb565>>(d: &mut D, title: &str, unit: &str, count: u32) {
     theme::topbar(d, title);
     theme::fill(d, 0, 20, theme::W as u32, (theme::HINT_Y - 22) as u32, theme::BG);
-    theme::text_center(d, i18n::t("ATTACK RUNNING", "SALDIRI CALISIYOR"), theme::W / 2, 38, theme::TITLE_FONT, theme::DESTRUCTIVE);
+    theme::text_center(d, i18n::t(hacking::ATTACK_RUNNING), theme::W / 2, 38, theme::TITLE_FONT, theme::DESTRUCTIVE);
     let line = alloc::format!("{} {}", count, unit);
     theme::text_center(d, &line, theme::W / 2, 62, theme::TITLE_FONT, theme::accent());
-    theme::hint(d, i18n::t("any key / G0 to stop", "durdurmak icin tus / G0"));
+    theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
 }
 
 /// Live evil-portal screen, painted by main between polls.
@@ -1266,7 +1267,7 @@ pub fn draw_portal<D: DrawTarget<Color = Rgb565>>(d: &mut D, ssid: &str, st: &po
     theme::text_center(d, &ssid_line, theme::W / 2, 26, theme::BODY_FONT, theme::accent());
     let svc = alloc::format!("dhcp {}  dns {}  http {}", st.dhcp, st.dns, st.http);
     theme::text_center(d, &svc, theme::W / 2, 44, theme::BODY_FONT, theme::MUTED);
-    let creds = alloc::format!("{}: {}", i18n::t("captured", "yakalanan"), st.creds);
+    let creds = alloc::format!("{}: {}", i18n::t(hacking::CAPTURED), st.creds);
     let col = if st.creds > 0 { theme::DESTRUCTIVE } else { theme::FG };
     theme::text_center(d, &creds, theme::W / 2, 62, theme::TITLE_FONT, col);
     if st.creds > 0 {
@@ -1275,14 +1276,14 @@ pub fn draw_portal<D: DrawTarget<Color = Rgb565>>(d: &mut D, ssid: &str, st: &po
         theme::text(d, &u, theme::PAD, 82, theme::BODY_FONT, theme::FG);
         theme::text(d, &p, theme::PAD, 94, theme::BODY_FONT, theme::FG);
     }
-    theme::hint(d, i18n::t("any key / G0 to stop", "durdurmak icin tus / G0"));
+    theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
 }
 
 /// Live LAN-scan screen, painted by main between polls.
 pub fn draw_netscan<D: DrawTarget<Color = Rgb565>>(d: &mut D, st: &netscan::NetResult) {
     theme::topbar(d, Tool::NetScan.name());
     theme::fill(d, 0, 20, theme::W as u32, (theme::HINT_Y - 22) as u32, theme::BG);
-    let phase = alloc::format!("{}: {}", i18n::t("phase", "asama"), st.phase);
+    let phase = alloc::format!("{}: {}", i18n::t(hacking::PHASE), st.phase);
     theme::text_center(d, &phase, theme::W / 2, 26, theme::BODY_FONT, theme::accent());
     if st.got_ip {
         let ip = alloc::format!("ip {}.{}.{}.{}", st.ip[0], st.ip[1], st.ip[2], st.ip[3]);
@@ -1298,14 +1299,14 @@ pub fn draw_netscan<D: DrawTarget<Color = Rgb565>>(d: &mut D, st: &netscan::NetR
                 line.push_str(&alloc::format!("{}", p));
             }
         }
-        let cnt = alloc::format!("{} ({}/{}):", i18n::t("open", "acik"), st.open_count(), st.scanned);
+        let cnt = alloc::format!("{} ({}/{}):", i18n::t(hacking::OPEN), st.open_count(), st.scanned);
         theme::text(d, &cnt, theme::PAD, 60, theme::BODY_FONT, theme::MUTED);
         let col = if st.open_count() > 0 { theme::DESTRUCTIVE } else { theme::FG };
         theme::text(d, if line.is_empty() { "-" } else { &line }, theme::PAD, 74, theme::BODY_FONT, col);
     } else {
-        theme::text_center(d, i18n::t("joining + DHCP...", "baglaniyor + DHCP..."), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
+        theme::text_center(d, i18n::t(hacking::JOINING_DHCP), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
     }
-    theme::hint(d, i18n::t("any key / G0 to stop", "durdurmak icin tus / G0"));
+    theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
 }
 
 // ---- list navigation helpers (skip the difficulty headers) ----

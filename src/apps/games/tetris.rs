@@ -13,6 +13,7 @@ use embedded_graphics::{mono_font::ascii::FONT_10X20, pixelcolor::Rgb565, prelud
 use esp_hal::time::{Duration, Instant};
 
 use crate::{i18n, palette, theme};
+use crate::i18n::tetris;
 
 // ---- well geometry (square cells; the well is an integer number of them) ----
 const CELL: i32 = 6;
@@ -297,11 +298,11 @@ impl Tetris {
         theme::fill(d, 56, 3, 110, 13, theme::BG);
         let mut sb = [0u8; 8];
         let s = fmt_u16(self.score, &mut sb);
-        theme::text(d, i18n::t("SC", "SK"), 58, 4, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(tetris::SCORE_ABBR), 58, 4, theme::BODY_FONT, theme::MUTED);
         theme::text(d, s, 58 + 3 * 6, 4, theme::BODY_FONT, theme::accent());
         let mut lb = [0u8; 8];
         let l = fmt_u16(self.lines, &mut lb);
-        theme::text(d, i18n::t("LN", "SR"), 120, 4, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(tetris::LINES_ABBR), 120, 4, theme::BODY_FONT, theme::MUTED);
         theme::text(d, l, 120 + 3 * 6, 4, theme::BODY_FONT, theme::FG);
     }
 
@@ -354,7 +355,7 @@ impl Tetris {
         theme::card(d, 36, cy - 30, (theme::W - 72) as u32, 56, Some(theme::accent()));
         theme::text_center(
             d,
-            i18n::t("GAME OVER", "OYUN BITTI"),
+            i18n::t(tetris::GAME_OVER),
             theme::W / 2,
             cy - 12,
             &FONT_10X20,
@@ -363,7 +364,7 @@ impl Tetris {
         let mut buf = [0u8; 16];
         let s = fmt_score_line(self.score, &mut buf);
         theme::text_center(d, s, theme::W / 2, cy + 8, theme::BODY_FONT, theme::accent());
-        theme::hint(d, i18n::t("any key: play again", "herhangi tus: tekrar"));
+        theme::hint(d, i18n::t(tetris::ANY_KEY_PLAY_AGAIN));
     }
 
     /// Repaint the dynamic surface (well + frame + hud) without touching topbar.
@@ -378,9 +379,9 @@ impl Tetris {
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.reset();
         theme::clear(d);
-        theme::topbar(d, i18n::t("Tetris", "Tetris"));
+        theme::topbar(d, i18n::t(tetris::TETRIS));
         self.redraw(d);
-        theme::hint(d, i18n::t("rot up  drop enter", "don ust  birak enter"));
+        theme::hint(d, i18n::t(tetris::ROT_DROP_HINT));
     }
 
     pub fn on_key<D: DrawTarget<Color = Rgb565>>(&mut self, rc: (u8, u8), d: &mut D) {
@@ -391,9 +392,9 @@ impl Tetris {
             // Any key restarts a fresh game.
             self.reset();
             theme::clear(d);
-            theme::topbar(d, i18n::t("Tetris", "Tetris"));
+            theme::topbar(d, i18n::t(tetris::TETRIS));
             self.redraw(d);
-            theme::hint(d, i18n::t("rot up  drop enter", "don ust  birak enter"));
+            theme::hint(d, i18n::t(tetris::ROT_DROP_HINT));
             return;
         }
 
@@ -485,7 +486,7 @@ fn fmt_u16(v: u16, buf: &mut [u8; 8]) -> &str {
 
 /// "score N" on the game-over card (ASCII only, bilingual prefix).
 fn fmt_score_line(v: u16, buf: &mut [u8; 16]) -> &str {
-    let prefix = i18n::t("score ", "skor ").as_bytes();
+    let prefix = i18n::t(tetris::SCORE_PREFIX).as_bytes();
     let mut j = 0;
     for &b in prefix {
         if j < buf.len() {

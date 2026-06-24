@@ -13,6 +13,7 @@ use embedded_sdmmc::{BlockDevice, Mode, TimeSource, VolumeIdx, VolumeManager};
 use esp_hal::time::{Duration, Instant};
 
 use crate::hal::keymap;
+use crate::i18n::chip8;
 use crate::{i18n, theme};
 
 const CW: usize = 64; // CHIP-8 display width
@@ -411,15 +412,15 @@ impl Chip8 {
             theme::text(d, e, theme::PAD, 44, theme::TITLE_FONT, theme::FG);
             theme::text(
                 d,
-                i18n::t("put a ROM at /ECHO/CHIP8.CH8", "ROM'u /ECHO/CHIP8.CH8'e koy"),
+                i18n::t(chip8::PUT_ROM),
                 theme::PAD,
                 64,
                 theme::BODY_FONT,
                 theme::MUTED,
             );
-            theme::hint(d, i18n::t("` menu", "` menu"));
+            theme::hint(d, i18n::t(chip8::MENU));
         } else {
-            theme::hint(d, i18n::t("123 qwe asd zxc + arrows  ` back", "123 qwe asd zxc + ok  ` geri"));
+            theme::hint(d, i18n::t(chip8::KEYS_HINT));
         }
     }
 }

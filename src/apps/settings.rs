@@ -5,6 +5,7 @@ use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 
 use crate::config::Config;
 use crate::i18n;
+use crate::i18n::settings;
 use crate::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,17 +29,17 @@ enum Row {
 }
 
 const ROWS: &[Row] = &[
-    Row::Header(|| i18n::t("GENERAL", "GENEL")),
+    Row::Header(|| i18n::t(settings::GENERAL)),
     Row::Item(Item::Language),
     Row::Item(Item::Led),
     Row::Item(Item::LedBright),
     Row::Item(Item::Intro),
     Row::Item(Item::DispBright),
-    Row::Header(|| i18n::t("SYNTHWAVE", "SYNTHWAVE")),
+    Row::Header(|| i18n::t(settings::SYNTHWAVE)),
     Row::Item(Item::SynthScale),
     Row::Item(Item::SynthVol),
     Row::Item(Item::RockChord),
-    Row::Header(|| i18n::t("FILE BROWSER", "DOSYA TARAYICI")),
+    Row::Header(|| i18n::t(settings::FILE_BROWSER)),
     Row::Item(Item::SortBy),
     Row::Item(Item::ShowHidden),
     Row::Item(Item::ConfirmDel),
@@ -140,10 +141,10 @@ impl Settings {
     pub fn draw(&self, d: &mut impl DrawTarget<Color = Rgb565>, cfg: &Config, clear: bool) {
         if clear {
             theme::clear(d);
-            theme::topbar(d, i18n::t("Settings", "Ayarlar"));
+            theme::topbar(d, i18n::t(settings::SETTINGS));
             theme::hint(
                 d,
-                i18n::t("up/down select   left/right change   ` menu", "yukari/asagi sec   sol/sag degistir   ` menu"),
+                i18n::t(settings::HINT),
             );
         }
 
@@ -213,25 +214,25 @@ fn step(v: u8, fwd: bool, lo: u8, hi: u8) -> u8 {
 
 fn on_off(b: bool) -> &'static str {
     if b {
-        i18n::t("On", "Acik")
+        i18n::t(settings::ON)
     } else {
-        i18n::t("Off", "Kapali")
+        i18n::t(settings::OFF)
     }
 }
 
 fn item_label(it: Item) -> &'static str {
     match it {
-        Item::Language => i18n::t("Language", "Dil"),
-        Item::Led => i18n::t("LED", "LED"),
-        Item::LedBright => i18n::t("LED bright", "LED parlak"),
-        Item::Intro => i18n::t("Boot intro", "Acilis"),
-        Item::DispBright => i18n::t("Brightness", "Parlaklik"),
-        Item::SynthScale => i18n::t("Start scale", "Baslangic gam"),
-        Item::SynthVol => i18n::t("Start volume", "Baslangic ses"),
-        Item::RockChord => i18n::t("Power chord", "Power chord"),
-        Item::SortBy => i18n::t("Sort by", "Siralama"),
-        Item::ShowHidden => i18n::t("Show hidden", "Gizliyi goster"),
-        Item::ConfirmDel => i18n::t("Confirm del", "Silme onayi"),
+        Item::Language => i18n::t(settings::LANGUAGE),
+        Item::Led => i18n::t(settings::LED),
+        Item::LedBright => i18n::t(settings::LED_BRIGHT),
+        Item::Intro => i18n::t(settings::BOOT_INTRO),
+        Item::DispBright => i18n::t(settings::BRIGHTNESS),
+        Item::SynthScale => i18n::t(settings::START_SCALE),
+        Item::SynthVol => i18n::t(settings::START_VOLUME),
+        Item::RockChord => i18n::t(settings::POWER_CHORD),
+        Item::SortBy => i18n::t(settings::SORT_BY),
+        Item::ShowHidden => i18n::t(settings::SHOW_HIDDEN),
+        Item::ConfirmDel => i18n::t(settings::CONFIRM_DEL),
     }
 }
 
@@ -248,9 +249,9 @@ fn draw_value(d: &mut impl DrawTarget<Color = Rgb565>, cfg: &Config, it: Item, x
         Item::RockChord => on_off(cfg.rock_chord),
         Item::SortBy => {
             if cfg.sort_by == 1 {
-                i18n::t("Size", "Boyut")
+                i18n::t(settings::SIZE)
             } else {
-                i18n::t("Name", "Isim")
+                i18n::t(settings::NAME)
             }
         }
         Item::ShowHidden => on_off(cfg.show_hidden),

@@ -14,6 +14,7 @@ use embedded_graphics::{mono_font::ascii::FONT_10X20, pixelcolor::Rgb565, prelud
 use esp_hal::time::Instant;
 
 use crate::{i18n, palette, theme};
+use crate::i18n::g2048;
 
 // ---- board geometry ----
 const N: usize = 4; // 4x4
@@ -277,7 +278,7 @@ impl G2048 {
         let s = fmt_u32(self.score, &mut buf);
         // erase previous value (battery occupies the far right ~52px)
         theme::fill(d, 70, 3, 90, 13, theme::BG);
-        theme::text(d, i18n::t("SCORE", "SKOR"), 74, 4, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(g2048::SCORE), 74, 4, theme::BODY_FONT, theme::MUTED);
         theme::text(d, s, 74 + 6 * 6, 4, theme::BODY_FONT, theme::accent());
     }
 
@@ -297,11 +298,11 @@ impl G2048 {
     fn draw_over<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
         let cy = BOARD_TOP + BOARD_PX / 2;
         theme::card(d, 36, cy - 30, (theme::W - 72) as u32, 56, Some(theme::accent()));
-        theme::text_center(d, i18n::t("GAME OVER", "OYUN BITTI"), theme::W / 2, cy - 12, &FONT_10X20, theme::FG);
+        theme::text_center(d, i18n::t(g2048::GAME_OVER), theme::W / 2, cy - 12, &FONT_10X20, theme::FG);
         let mut buf = [0u8; 20];
         let s = fmt_score_line(self.score, &mut buf);
         theme::text_center(d, s, theme::W / 2, cy + 8, theme::BODY_FONT, theme::accent());
-        theme::hint(d, i18n::t("any key: play again", "herhangi tus: tekrar"));
+        theme::hint(d, i18n::t(g2048::PLAY_AGAIN));
     }
 
     // ---- public interface (called by main.rs) ----
@@ -309,9 +310,9 @@ impl G2048 {
     pub fn enter<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.reset();
         theme::clear(d);
-        theme::topbar(d, i18n::t("2048", "2048"));
+        theme::topbar(d, i18n::t(g2048::TITLE_2048));
         self.draw_board(d);
-        theme::hint(d, i18n::t("arrows: slide", "oklar: kaydir"));
+        theme::hint(d, i18n::t(g2048::ARROWS_SLIDE));
     }
 
     pub fn on_key<D: DrawTarget<Color = Rgb565>>(&mut self, rc: (u8, u8), d: &mut D) {
@@ -322,9 +323,9 @@ impl G2048 {
             // Any key deals a fresh game.
             self.reset();
             theme::clear(d);
-            theme::topbar(d, i18n::t("2048", "2048"));
+            theme::topbar(d, i18n::t(g2048::TITLE_2048));
             self.draw_board(d);
-            theme::hint(d, i18n::t("arrows: slide", "oklar: kaydir"));
+            theme::hint(d, i18n::t(g2048::ARROWS_SLIDE));
             return;
         }
 
@@ -397,7 +398,7 @@ fn fmt_u32(v: u32, buf: &mut [u8; 12]) -> &str {
 
 /// "score N" on the game-over card (ASCII only, bilingual prefix).
 fn fmt_score_line(v: u32, buf: &mut [u8; 20]) -> &str {
-    let prefix = i18n::t("score ", "skor ").as_bytes();
+    let prefix = i18n::t(g2048::SCORE_PREFIX).as_bytes();
     let mut j = 0;
     for &b in prefix {
         if j < buf.len() {

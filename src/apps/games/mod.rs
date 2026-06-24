@@ -14,6 +14,7 @@ use crate::apps::games::g2048::G2048;
 use crate::apps::games::pong::Pong;
 use crate::apps::games::snake::Snake;
 use crate::apps::games::tetris::Tetris;
+use crate::i18n::games;
 use crate::{i18n, theme};
 
 /// Display names (language-neutral; arcade titles stay as-is). With the emulator
@@ -122,7 +123,7 @@ impl Games {
 
     fn draw_list<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Games", "Oyunlar"));
+        theme::topbar(d, i18n::t(games::GAMES));
         for (i, name) in GAMES.iter().enumerate() {
             let y = TOP + i as i32 * ROW_H;
             let selected = i == self.sel;
@@ -132,6 +133,6 @@ impl Games {
             }
             theme::text(d, name, theme::PAD + 16, y, theme::TITLE_FONT, col);
         }
-        theme::hint(d, i18n::t("UP/DN pick  ENTER play  ` menu", "YUK/AS sec  ENTER oyna  ` menu"));
+        theme::hint(d, i18n::t(games::HINT));
     }
 }

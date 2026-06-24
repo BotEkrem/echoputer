@@ -14,6 +14,7 @@ use embedded_sdmmc::{BlockDevice, Mode, RawDirectory, RawFile, RawVolume, TimeSo
 use esp_hal::time::Instant;
 
 use crate::{i18n, theme};
+use crate::i18n::recorder;
 
 const DIR_APP: &str = "ECHO";
 const SAMPLE_RATE: u32 = 16000;
@@ -177,10 +178,10 @@ impl Recorder {
 
     fn draw(&self, d: &mut impl DrawTarget<Color = Rgb565>) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Mic Recorder", "Mikrofon"));
+        theme::topbar(d, i18n::t(recorder::TITLE));
         if let Some(e) = self.msg {
             theme::text(d, e, theme::PAD, 44, theme::TITLE_FONT, theme::DESTRUCTIVE);
-            theme::hint(d, i18n::t("ENTER record  ` back", "ENTER kayit  ` geri"));
+            theme::hint(d, i18n::t(recorder::ENTER_RECORD_BACK));
             return;
         }
         if self.recording {
@@ -188,7 +189,7 @@ impl Recorder {
             let mut tb = [0u8; 12];
             let ts = fmt_mmss(secs, &mut tb);
             theme::text_center(d, ts, theme::W / 2, 40, theme::TITLE_FONT, theme::DESTRUCTIVE);
-            theme::text_center(d, i18n::t("REC", "KAYIT"), theme::W / 2, 22, theme::BODY_FONT, theme::DESTRUCTIVE);
+            theme::text_center(d, i18n::t(recorder::REC), theme::W / 2, 22, theme::BODY_FONT, theme::DESTRUCTIVE);
             // level meter: a bar proportional to the recent peak (0..32767)
             let w = (self.peak as i32 * (theme::W as i32 - 2 * theme::PAD) / 32767).clamp(0, theme::W as i32 - 2 * theme::PAD);
             theme::fill(d, theme::PAD, 60, (theme::W - 2 * theme::PAD) as u32, 10, theme::SURFACE2);
@@ -197,11 +198,11 @@ impl Recorder {
             let mut kb = [0u8; 12];
             let ks = fmt_kb(self.data_bytes, &mut kb);
             theme::text_center(d, ks, theme::W / 2, 80, theme::BODY_FONT, theme::MUTED);
-            theme::hint(d, i18n::t("ENTER stop + save  ` back", "ENTER durdur + kaydet  ` geri"));
+            theme::hint(d, i18n::t(recorder::ENTER_STOP_SAVE));
         } else {
-            theme::text_center(d, i18n::t("ready", "hazir"), theme::W / 2, 44, theme::TITLE_FONT, theme::MUTED);
-            theme::text_center(d, i18n::t("saves to /ECHO/REC0.WAV", "/ECHO/REC0.WAV'a kaydeder"), theme::W / 2, 66, theme::BODY_FONT, theme::FAINT);
-            theme::hint(d, i18n::t("ENTER record  ` back", "ENTER kayit  ` geri"));
+            theme::text_center(d, i18n::t(recorder::READY), theme::W / 2, 44, theme::TITLE_FONT, theme::MUTED);
+            theme::text_center(d, i18n::t(recorder::SAVES_TO), theme::W / 2, 66, theme::BODY_FONT, theme::FAINT);
+            theme::hint(d, i18n::t(recorder::ENTER_RECORD_BACK));
         }
     }
 }

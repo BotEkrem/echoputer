@@ -13,6 +13,7 @@ use embedded_graphics::{
 use embedded_hal::i2c::I2c;
 
 use crate::hal::bmi270;
+use crate::i18n::level;
 use crate::{i18n, theme};
 
 const CX: i32 = theme::W / 2; // 120
@@ -33,16 +34,16 @@ impl Level {
 
     pub fn enter(&mut self, d: &mut impl DrawTarget<Color = Rgb565>) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Level", "Su Terazisi"));
+        theme::topbar(d, i18n::t(level::LEVEL));
         if !bmi270::ready() {
-            theme::text_center(d, i18n::t("no IMU detected", "IMU bulunamadi"), CX, CY, theme::TITLE_FONT, theme::DESTRUCTIVE);
-            theme::hint(d, i18n::t("` back", "` geri"));
+            theme::text_center(d, i18n::t(level::NO_IMU), CX, CY, theme::TITLE_FONT, theme::DESTRUCTIVE);
+            theme::hint(d, i18n::t(level::BACK));
             return;
         }
         // static outer ring (the ball + crosshair are repainted each tick inside it)
         let st = PrimitiveStyle::with_stroke(theme::MUTED, 1);
         let _ = Circle::new(Point::new(CX - R, CY - R), (2 * R) as u32).into_styled(st).draw(d);
-        theme::hint(d, i18n::t("lay flat; ball centres when level", "duz tut; teraziyken top ortalanir"));
+        theme::hint(d, i18n::t(level::LAY_FLAT_HINT));
     }
 
     pub fn exit(&mut self) {}

@@ -18,6 +18,7 @@ use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 use embedded_sdmmc::{BlockDevice, DirEntry, Mode as FileMode, ShortFileName, TimeSource, VolumeIdx, VolumeManager};
 
 use crate::hal::keymap;
+use crate::i18n::notes;
 use crate::{i18n, theme};
 
 const DIR_APP: &str = "ECHO"; // 8.3 FAT short name
@@ -227,15 +228,15 @@ impl Notes {
 
     fn draw_list(&self, d: &mut impl DrawTarget<Color = Rgb565>) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Notes", "Notlar"));
+        theme::topbar(d, i18n::t(notes::NOTES));
         for i in 0..SLOTS {
             let y = 24 + i as i32 * 15;
             let selected = i == self.sel;
-            let name = format!("{} {}", i18n::t("Note", "Not"), i + 1);
+            let name = format!("{} {}", i18n::t(notes::NOTE), i + 1);
             let state = if self.used[i] {
-                i18n::t("written", "dolu")
+                i18n::t(notes::WRITTEN)
             } else {
-                i18n::t("empty", "bos")
+                i18n::t(notes::EMPTY)
             };
             let col = if selected { theme::accent() } else { theme::MUTED };
             if selected {
@@ -244,7 +245,7 @@ impl Notes {
             theme::text(d, &name, theme::PAD + 12, y, theme::BODY_FONT, col);
             theme::text_right(d, state, theme::W - theme::PAD, y, theme::BODY_FONT, theme::FAINT);
         }
-        theme::hint(d, i18n::t("UP/DN pick  ENTER open  ` menu", "YUK/AS sec  ENTER ac  ` menu"));
+        theme::hint(d, i18n::t(notes::LIST_HINT));
     }
 
     /// Wrap `buf` into display lines, breaking on '\n' and at the panel width.
@@ -267,7 +268,7 @@ impl Notes {
 
     fn draw_edit(&self, d: &mut impl DrawTarget<Color = Rgb565>) {
         theme::clear(d);
-        let mut title = format!("{} {}", i18n::t("Note", "Not"), self.slot + 1);
+        let mut title = format!("{} {}", i18n::t(notes::NOTE), self.slot + 1);
         if self.dirty {
             title.push_str(" *");
         }

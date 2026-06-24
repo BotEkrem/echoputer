@@ -17,6 +17,7 @@ mod test_rom;
 mod video;
 
 use crate::hal::fb::FrameBuf;
+use crate::i18n::emu;
 use crate::{i18n, theme};
 use esp_hal::time::{Duration, Instant};
 use embedded_sdmmc::{
@@ -429,11 +430,11 @@ impl Emu {
 
     fn draw_list(&self, d: &mut FrameBuf) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Game Boy", "Game Boy"));
+        theme::topbar(d, i18n::t(emu::GAME_BOY));
         if self.count == 0 {
             theme::text(
                 d,
-                i18n::t("No ROMs in /ECHO/ROMS/", "/ECHO/ROMS/ bos"),
+                i18n::t(emu::NO_ROMS),
                 theme::PAD,
                 TOP + 6,
                 theme::BODY_FONT,
@@ -441,7 +442,7 @@ impl Emu {
             );
             theme::text(
                 d,
-                i18n::t("Copy .gb / .gbc files there", ".gb / .gbc dosyalari koy"),
+                i18n::t(emu::COPY_ROMS),
                 theme::PAD,
                 TOP + 22,
                 theme::BODY_FONT,
@@ -461,15 +462,15 @@ impl Emu {
         }
         theme::hint(
             d,
-            i18n::t("UP/DN pick  ENTER play  ` menu", "YUK/AS sec  ENTER oyna  ` menu"),
+            i18n::t(emu::LIST_HINT),
         );
     }
 
     fn draw_error(&self, d: &mut FrameBuf, msg: &str) {
         theme::clear(d);
-        theme::topbar(d, i18n::t("Game Boy", "Game Boy"));
+        theme::topbar(d, i18n::t(emu::GAME_BOY));
         theme::text(d, msg, theme::PAD, TOP + 10, theme::TITLE_FONT, theme::FG);
-        theme::hint(d, i18n::t("` menu", "` menu"));
+        theme::hint(d, i18n::t(emu::MENU_HINT));
     }
 }
 

@@ -10,6 +10,7 @@ use embedded_hal::i2c::I2c;
 use esp_hal::time::{Duration, Instant};
 
 use crate::hal::{bmi270, keymap};
+use crate::i18n::stepcount;
 use crate::{i18n, theme};
 
 const TH: f32 = 0.12; // g above baseline to register a peak (tune for sensitivity)
@@ -37,15 +38,15 @@ impl StepCount {
     pub fn enter(&mut self, d: &mut impl DrawTarget<Color = Rgb565>) {
         self.shown = u32::MAX; // force a redraw
         theme::clear(d);
-        theme::topbar(d, i18n::t("Step Counter", "Adimsayar"));
+        theme::topbar(d, i18n::t(stepcount::STEP_COUNTER));
         if !bmi270::ready() {
-            theme::text_center(d, i18n::t("no IMU detected", "IMU bulunamadi"), theme::W / 2, 56, theme::TITLE_FONT, theme::DESTRUCTIVE);
-            theme::hint(d, i18n::t("` back", "` geri"));
+            theme::text_center(d, i18n::t(stepcount::NO_IMU), theme::W / 2, 56, theme::TITLE_FONT, theme::DESTRUCTIVE);
+            theme::hint(d, i18n::t(stepcount::BACK));
             return;
         }
-        theme::text_center(d, i18n::t("steps", "adim"), theme::W / 2, 84, theme::BODY_FONT, theme::MUTED);
+        theme::text_center(d, i18n::t(stepcount::STEPS), theme::W / 2, 84, theme::BODY_FONT, theme::MUTED);
         self.draw_count(d);
-        theme::hint(d, i18n::t("walk to count  ENTER reset  ` back", "yuru say  ENTER sifirla  ` geri"));
+        theme::hint(d, i18n::t(stepcount::WALK_HINT));
     }
 
     pub fn exit(&mut self) {}
