@@ -86,6 +86,14 @@ smoltcp = { version = "0.13", default-features = false, features = [
     "socket-dhcpv4",
 ] }
 
+# USB HID (mouse+keyboard) for the Misc "Remote" app. Rides the S3 USB-OTG via
+# esp-hal otg_fs + usb-device; the OTG peripheral is claimed LAZILY (only when the
+# user switches Remote to USB) so the USB-Serial-JTAG console survives by default.
+# usb-device 0.3 is also pulled transitively by esp-synopsys-usb-otg; pin it here
+# so we can name its types directly (versions unify on 0.3.x).
+usb-device = "0.3"
+usbd-hid = "0.8"
+
 [build-dependencies]
 # Compiles the vendored Game Boy core (Peanut-GB) with the xtensa GCC, but only
 # when the `emu` feature is on (build.rs early-returns otherwise).

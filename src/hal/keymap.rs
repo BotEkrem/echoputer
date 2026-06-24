@@ -40,3 +40,30 @@ pub fn ch_shift(row: u8, col: u8, shift: bool) -> Option<u8> {
 pub const K_BKSP: (u8, u8) = (0, 13);
 /// Left shift key, tracked by callers of [`ch_shift`].
 pub const K_SHIFT: (u8, u8) = (2, 1);
+/// Tab key (row 1 col 0) — the Remote app uses it to switch mouse/keyboard mode.
+pub const K_TAB: (u8, u8) = (1, 0);
+/// The `-` and `=` keys (row 0) — the Remote app uses them to adjust mouse DPI.
+pub const K_MINUS: (u8, u8) = (0, 11);
+pub const K_EQUALS: (u8, u8) = (0, 12);
+
+/// HID keyboard Usage IDs (USB HID Usage Table, Keyboard/Keypad page 0x07) for
+/// each key, mirroring the layout above. 0 = a modifier/none key. This is the
+/// *base* usage (same for '1' and '!'); the shift modifier byte is supplied
+/// separately by the caller (the Remote app's shift toggle).
+const USAGE: [[u8; 14]; 4] = [
+    [0x35, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2D, 0x2E, 0x2A],
+    [0x2B, 0x14, 0x1A, 0x08, 0x15, 0x17, 0x1C, 0x18, 0x0C, 0x12, 0x13, 0x2F, 0x30, 0x31],
+    [0x00, 0x00, 0x04, 0x16, 0x07, 0x09, 0x0A, 0x0B, 0x0D, 0x0E, 0x0F, 0x33, 0x34, 0x28],
+    [0x00, 0x00, 0x00, 0x1D, 0x1B, 0x06, 0x19, 0x05, 0x11, 0x10, 0x36, 0x37, 0x38, 0x2C],
+];
+
+/// HID keyboard Usage ID for a key, or `None` for modifier / unknown keys.
+pub fn hid_usage(row: u8, col: u8) -> Option<u8> {
+    if (row as usize) < 4 && (col as usize) < 14 {
+        let u = USAGE[row as usize][col as usize];
+        if u != 0 {
+            return Some(u);
+        }
+    }
+    None
+}

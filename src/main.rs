@@ -34,7 +34,7 @@ use crate::apps::{
     browser, charge, games, hacking, menu, misc, notes, player, repl, scales, settings, splash, stopwatch, synth,
     sysinfo, ui, webui,
 };
-use crate::hal::{battery, bmi270, es8311, fb, ir, tca8418, ws2812};
+use crate::hal::{battery, bmi270, es8311, fb, ir, tca8418, usb_hid, ws2812};
 use crate::i18n::app;
 use crate::radio::portal;
 
@@ -357,7 +357,12 @@ fn main() -> ! {
     let mut player = player::Player::new();
     let mut repl = repl::Repl::new();
     let mut games = games::Games::new();
-    let mut misc = misc::Misc::new(ir_tx);
+    // The Remote app is handed the USB-OTG peripheral + its D+/D- pins (claimed
+    // lazily only if the user switches Remote to USB — see apps::misc::remote).
+    let mut misc = misc::Misc::new(
+        ir_tx,
+        usb_hid::UsbParts { usb0: peripherals.USB0, dp: peripherals.GPIO20, dm: peripherals.GPIO19 },
+    );
     #[cfg(feature = "emu")]
     let mut emu = apps::emu::Emu::new();
     let mut stopwatch = stopwatch::Stopwatch::new();

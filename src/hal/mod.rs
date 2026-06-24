@@ -10,4 +10,5 @@ pub mod fb;
 pub mod ir;
 pub mod keymap;
 pub mod tca8418;
+pub mod usb_hid;
 pub mod ws2812;

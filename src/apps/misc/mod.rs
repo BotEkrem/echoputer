@@ -22,6 +22,7 @@ pub mod qr;
 pub mod qr_encode;
 #[cfg(not(feature = "emugbc"))]
 pub mod recorder;
+pub mod remote;
 pub mod stepcount;
 
 use crate::apps::misc::calc::Calc;
@@ -33,16 +34,23 @@ use crate::apps::misc::level::Level;
 use crate::apps::misc::qr::Qr;
 #[cfg(not(feature = "emugbc"))]
 use crate::apps::misc::recorder::Recorder;
+use crate::apps::misc::remote::Remote;
 use crate::apps::misc::stepcount::StepCount;
 use crate::hal::ir::IrTx;
+use crate::hal::usb_hid::UsbParts;
 use crate::i18n::misc;
 use crate::{i18n, theme};
 
-// Indices are stable across builds (Level=6, Steps=7); only Mic (8) is build-gated.
+// Indices are stable across builds (Level=6, Steps=7); Mic (8) is build-gated.
+// Remote is always LAST, so its index shifts with Mic's presence — dispatch keys
+// off the REMOTE const below, never a literal.
 #[cfg(not(feature = "emugbc"))]
-const ITEMS: [&str; 9] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Mic"];
+const ITEMS: [&str; 10] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Mic", "Remote"];
 #[cfg(feature = "emugbc")]
-const ITEMS: [&str; 8] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps"];
+const ITEMS: [&str; 9] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Remote"];
+
+/// Index of the Remote item (always last; 9 with Mic, 8 on emugbc without it).
+const REMOTE: usize = ITEMS.len() - 1;
 
 const TOP: i32 = 28;
 const ROW_H: i32 = 18;
@@ -62,10 +70,11 @@ pub struct Misc {
     stepcount: StepCount,
     #[cfg(not(feature = "emugbc"))]
     recorder: Recorder,
+    remote: Remote,
 }
 
 impl Misc {
-    pub fn new(ir_tx: IrTx) -> Self {
+    pub fn new(ir_tx: IrTx, usb: UsbParts) -> Self {
         Misc {
             sel: 0,
             scroll: 0,
@@ -80,6 +89,7 @@ impl Misc {
             stepcount: StepCount::new(),
             #[cfg(not(feature = "emugbc"))]
             recorder: Recorder::new(),
+            remote: Remote::new(usb),
         }
     }
 
@@ -113,6 +123,7 @@ impl Misc {
             Some(7) => self.stepcount.exit(),
             #[cfg(not(feature = "emugbc"))]
             Some(8) => self.recorder.finalize(sd),
+            Some(REMOTE) => self.remote.exit(),
             _ => {}
         }
     }
@@ -129,8 +140,14 @@ impl Misc {
         }
     }
 
-    /// G0 button: same as Backspace here.
+    /// G0 button: in the Remote app it toggles the connection type (USB/Bluetooth)
+    /// and is consumed (stay in the app); everywhere else it behaves like Backspace
+    /// (back to the list, then a second press pops to the home menu).
     pub fn g0<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>, d: &mut impl DrawTarget<Color = Rgb565>) -> bool {
+        if self.active == Some(REMOTE) {
+            self.remote.toggle_conn(d);
+            return true;
+        }
         self.back(sd, d)
     }
 
@@ -192,6 +209,7 @@ impl Misc {
             Some(7) => self.stepcount.on_key(rc, d),
             #[cfg(not(feature = "emugbc"))]
             Some(8) => self.recorder.on_key(rc, sd, d),
+            Some(REMOTE) => self.remote.on_key(rc, d),
             _ => {}
         }
     }
@@ -211,6 +229,7 @@ impl Misc {
             Some(7) => self.stepcount.tick(i2c, d),
             #[cfg(not(feature = "emugbc"))]
             Some(8) => self.recorder.tick(d),
+            Some(REMOTE) => self.remote.tick(d),
             _ => false,
         }
     }
@@ -232,6 +251,7 @@ impl Misc {
             7 => self.stepcount.enter(d),
             #[cfg(not(feature = "emugbc"))]
             8 => self.recorder.enter(d),
+            REMOTE => self.remote.enter(d),
             _ => {}
         }
     }

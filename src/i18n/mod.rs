@@ -32,6 +32,7 @@ pub mod pong;
 pub mod qr;
 #[cfg(not(feature = "emugbc"))]
 pub mod recorder;
+pub mod remote;
 pub mod settings;
 pub mod snake;
 pub mod stepcount;
