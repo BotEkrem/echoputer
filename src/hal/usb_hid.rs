@@ -13,6 +13,7 @@
 use alloc::boxed::Box;
 
 use esp_hal::otg_fs::{Usb, UsbBus};
+use esp_hal::time::{Duration, Instant};
 use esp_hal::peripherals::{GPIO19, GPIO20, USB0};
 use usb_device::bus::UsbBusAllocator;
 use usb_device::class::UsbClass;
@@ -72,19 +73,32 @@ impl UsbHid {
         let _ = self.mouse.push_input(&MouseReport { buttons: 0, x: dx, y: dy, wheel: 0, pan: 0 });
     }
 
-    /// Send one keypress (HID usage + modifier byte), then release.
+    /// Send one keystroke as a CLEAN TAP: press, hold long enough for the host to
+    /// poll it (HID interval is 8 ms), then release (also held). Sending press +
+    /// release back-to-back lets the host miss the release and see the key as
+    /// stuck-down — macOS then shows the accent popup, the same letter can't be
+    /// typed twice, and input feels hung. The brief blocking hold fixes all three.
     pub fn key(&mut self, modifier: u8, usage: u8) {
+        self.report(modifier, usage);
+        self.hold_ms(12);
+        self.report(0, 0); // release (no keys held)
+        self.hold_ms(12);
+    }
+
+    fn report(&mut self, modifier: u8, usage: u8) {
         let _ = self.kbd.push_input(&KeyboardReport {
             modifier,
             reserved: 0,
             leds: 0,
             keycodes: [usage, 0, 0, 0, 0, 0],
         });
-        let _ = self.kbd.push_input(&KeyboardReport {
-            modifier: 0,
-            reserved: 0,
-            leds: 0,
-            keycodes: [0; 6],
-        });
+    }
+
+    /// Pump the USB stack for `ms` so the host polls the current report at least once.
+    fn hold_ms(&mut self, ms: u64) {
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_millis(ms) {
+            self.poll();
+        }
     }
 }

@@ -13,8 +13,8 @@ use crate::hal::{bmi270, keymap};
 use crate::i18n::stepcount;
 use crate::{i18n, theme};
 
-const TH: f32 = 0.12; // g above baseline to register a peak (tune for sensitivity)
-const REFRACTORY_MS: u64 = 250; // min gap between counted steps
+const TH: f32 = 0.22; // g above baseline to register a peak (tune for sensitivity)
+const REFRACTORY_MS: u64 = 400; // min gap between counted steps (~walking cadence)
 
 pub struct StepCount {
     count: u32,

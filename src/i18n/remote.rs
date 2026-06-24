@@ -1,7 +1,7 @@
 //! remote screen translations.
 use super::Msg;
 
-pub const TITLE: Msg = ["Remote", "Remote"];
+pub const TITLE: Msg = ["Keyboard/Mouse", "Keyboard/Mouse"];
 pub const MOUSE: Msg = ["Mouse", "Fare"];
 pub const KEYBOARD: Msg = ["Keyboard", "Klavye"];
 pub const USB: Msg = ["USB", "USB"];

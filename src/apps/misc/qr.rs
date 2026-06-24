@@ -23,7 +23,8 @@ const AREA_H: i32 = 92; // QR drawing area height budget
 pub struct Qr {
     buf: Vec<u8>, // typed input (heap; empty until used)
     code: Option<QrCode>,
-    err: bool, // last encode overflowed
+    err: bool,   // last encode overflowed
+    shift: bool, // "Aa" caps/shift toggle for typed characters
 }
 
 impl Qr {
@@ -32,6 +33,7 @@ impl Qr {
             buf: Vec::new(),
             code: None,
             err: false,
+            shift: false,
         }
     }
 
@@ -39,6 +41,7 @@ impl Qr {
         self.buf.clear();
         self.code = None;
         self.err = false;
+        self.shift = false;
         self.draw_all(d);
     }
 
@@ -46,6 +49,12 @@ impl Qr {
     pub fn exit(&mut self) {
         self.code = None;
         self.buf = Vec::new();
+    }
+
+    /// "Aa" toggles caps/shift for typed characters (uppercase + symbols like `:`).
+    pub fn toggle_caps(&mut self, d: &mut impl DrawTarget<Color = Rgb565>) {
+        self.shift = !self.shift;
+        self.draw_input(d);
     }
 
     pub fn on_key(&mut self, rc: (u8, u8), d: &mut impl DrawTarget<Color = Rgb565>) {
@@ -62,7 +71,7 @@ impl Qr {
             }
             return;
         }
-        if let Some(b) = keymap::ch_shift(rc.0, rc.1, false) {
+        if let Some(b) = keymap::ch_shift(rc.0, rc.1, self.shift) {
             if self.buf.len() < CAP {
                 self.buf.push(b);
                 self.draw_input(d);

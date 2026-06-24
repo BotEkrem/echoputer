@@ -45,9 +45,9 @@ use crate::{i18n, theme};
 // Remote is always LAST, so its index shifts with Mic's presence — dispatch keys
 // off the REMOTE const below, never a literal.
 #[cfg(not(feature = "emugbc"))]
-const ITEMS: [&str; 10] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Mic", "Remote"];
+const ITEMS: [&str; 10] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Mic", "Keyboard/Mouse"];
 #[cfg(feature = "emugbc")]
-const ITEMS: [&str; 9] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Remote"];
+const ITEMS: [&str; 9] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Keyboard/Mouse"];
 
 /// Index of the Remote item (always last; 9 with Mic, 8 on emugbc without it).
 const REMOTE: usize = ITEMS.len() - 1;
@@ -149,6 +149,27 @@ impl Misc {
             return true;
         }
         self.back(sd, d)
+    }
+
+    /// True when an active input item (Calc/Convert/Dice/QR) needs Backspace to
+    /// DELETE a character rather than exit — main exempts it from the global back.
+    pub fn is_editing(&self) -> bool {
+        // Calc/Convert/Dice/QR delete on Backspace; the Remote USB keyboard sends
+        // Backspace to the HOST — both need it routed to on_key, not "go back".
+        matches!(self.active, Some(1 | 2 | 3 | 4)) || self.remote_typing()
+    }
+
+    /// "Aa" caps/shift toggle for the active item (only QR consumes it today).
+    pub fn toggle_caps(&mut self, d: &mut impl DrawTarget<Color = Rgb565>) {
+        if self.active == Some(4) {
+            self.qr.toggle_caps(d);
+        }
+    }
+
+    /// True in the Remote app's USB keyboard mode — main then suppresses key
+    /// auto-repeat so a held key sends ONE HID report (no host-side spam).
+    pub fn remote_typing(&self) -> bool {
+        self.active == Some(REMOTE) && self.remote.is_typing()
     }
 
     /// Free/finalise any running item (used when jumping straight home with `).

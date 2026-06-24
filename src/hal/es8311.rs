@@ -38,7 +38,8 @@ pub fn init<I: I2c>(i2c: &mut I) -> Result<(), I::Error> {
 /// cross-checked against the ES8311 User Guide Rev1.11.
 #[cfg(not(feature = "emugbc"))]
 const ADC_INIT: [(u8, u8); 6] = [
-    (0x01, 0xBA), // CLK_MANAGER: MCLK from BCLK, ADC clock domain enabled (DAC stays on)
+    (0x01, 0xBF), // CLK_MANAGER: ALL clock domains on (DAC bits 0xB5 | ADC bits 0x0A).
+    // 0xBA cleared the DAC-clock bits -> playback went silent; 0xBF keeps DAC + ADC.
     (0x0E, 0x02), // SYSTEM: power up analog PGA + ADC modulator
     (0x14, 0x18), // SYSTEM: LINSEL=1 (Mic1p-Mic1n) + PGAGAIN=8 -> +24 dB for the MEMS mic
     (0x17, 0xBF), // ADC: digital volume 0 dB

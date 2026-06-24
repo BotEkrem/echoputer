@@ -535,8 +535,12 @@ fn main() -> ! {
                     // Track the held key for auto-repeat. Shift/ENTER/home never
                     // repeat (that would spam case-toggles / launches / menu jumps).
                     let rc = (e.row, e.col);
-                    let repeatable =
-                        rc != crate::hal::keymap::K_SHIFT && rc != K_ENTER && rc != K_HOME;
+                    let repeatable = rc != crate::hal::keymap::K_SHIFT
+                        && rc != K_ENTER
+                        && rc != K_HOME
+                        // Remote's USB keyboard wants ONE report per physical press;
+                        // auto-repeat would spam the host. Mouse mode keeps repeat.
+                        && !(screen == Screen::Misc && misc.remote_typing());
                     if e.pressed && repeatable {
                         kbd_held = Some(rc);
                         kbd_held_since = Instant::now();
@@ -586,6 +590,7 @@ fn main() -> ! {
                         Screen::Hacking => hacking.toggle_caps(&mut fbuf),
                         Screen::Notes => notes.toggle_caps(&mut fbuf),
                         Screen::WebUi => webui.toggle_caps(&mut fbuf),
+                        Screen::Misc => misc.toggle_caps(&mut fbuf),
                         _ => {}
                     }
                     last_input = Instant::now();
@@ -661,6 +666,7 @@ fn main() -> ! {
                 && !(screen == Screen::Hacking && hacking.is_editing())
                 && !(screen == Screen::Notes && notes.is_editing())
                 && !(screen == Screen::WebUi && webui.is_editing())
+                && !(screen == Screen::Misc && misc.is_editing())
                 && screen != Screen::Repl
             {
                 match screen {

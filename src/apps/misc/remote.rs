@@ -58,6 +58,12 @@ impl Remote {
         // from USB just stops polling/sending. Nothing to free here.
     }
 
+    /// True in USB keyboard mode — main suppresses hold-to-repeat then, so a held
+    /// key sends ONE HID report (no host-side key spam). Mouse mode keeps repeat.
+    pub fn is_typing(&self) -> bool {
+        self.conn == Conn::Usb && self.mode == Mode::Keyboard
+    }
+
     /// G0: toggle the connection type. Switching to USB lazily claims the OTG
     /// peripheral (the console is lost from here until reboot).
     pub fn toggle_conn<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
