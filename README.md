@@ -79,7 +79,10 @@ Hacking is the security toolkit and has its own section below. The rest:
   typed text — a URL, a WiFi string — into a scannable QR code on the panel; **IR**,
   a transmit-only remote that fires NEC codes from the onboard IR LED on GPIO44
   (a few well-known TV-power presets plus a custom 32-bit code entered in hex; aim
-  the top edge at the device); and, on every build except `emugbc`, **Mic**, a
+  the top edge at the device); **Level**, a bubble level off the BMI270 IMU (lay it
+  flat and the ball centres, tilt it and the ball rolls, with the tilt angle shown);
+  **Steps**, a step counter off the same accelerometer (ENTER resets); and, on every
+  build except `emugbc`, **Mic**, a
   recorder that captures the onboard microphone to a WAV at `/ECHO/REC0.WAV` (the
   colour build leaves it out — its RAM is too tight to add the capture buffer next
   to the radio). `` ` ``/Backspace steps back to the list, then to the home menu.
@@ -226,7 +229,8 @@ src/
   selftest.rs   the serial self-test build (behind --features selftest)
 
   hal/          board drivers, the framebuffer and the keymap
-    fb, battery, es8311, tca8418, ws2812, ir (IR-LED NEC transmitter), keymap
+    fb, battery, es8311, bmi270 (IMU + its 8 KB config blob), tca8418, ws2812,
+    ir (IR-LED NEC transmitter), keymap
 
   radio/        the WiFi/BLE stack the Hacking and Web UI apps drive
     mod.rs        Radio, the sole owner of the WiFi+BLE peripherals
@@ -240,7 +244,8 @@ src/
     menu, splash, repl, games (snake, g2048, tetris, pong), stopwatch, notes,
     sysinfo, synth, scales, ui, browser, webui, charge, settings, hacking, wiki
     misc          the Misc sub-launcher + its apps: chip8, calc, convert, dice,
-                  qr (+ qr_encode), ir (NEC remote); recorder (mic -> WAV) off emugbc
+                  qr (+ qr_encode), ir (NEC remote), level + stepcount (BMI270 IMU);
+                  recorder (mic -> WAV) off emugbc
     emu/          the Game Boy emulator (mod, ffi, rom, input, video), behind
                   --features emu; the vendored C cores live in vendor/
     player/       the audio player (mod, wav, resample; mp3 behind --features
@@ -253,6 +258,7 @@ src/
 |-------|------------|
 | Display, ST7789V2 240x135 | SPI2, SCK 36, MOSI 35, CS 37, DC 34, RST 33, backlight 38 |
 | Keyboard, TCA8418 @ 0x34 | I2C, SDA 8, SCL 9 |
+| IMU, BMI270 @ 0x68 | I2C, SDA 8, SCL 9 (6-axis accel+gyro; no magnetometer, so no compass) |
 | Audio, ES8311 @ 0x18 + NS4150B | I2S0, BCLK 41, WS 43, DOUT 42; DIN 46 (mic ADC, off emugbc) |
 | SD card | SPI3, SCK 40, MOSI 14, MISO 39, CS 12, FAT32 |
 | RGB LED, WS2812 | GPIO21 (RMT ch0) |
