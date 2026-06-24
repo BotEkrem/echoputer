@@ -400,7 +400,9 @@ fn main() -> ! {
     #[cfg(feature = "emugbc")]
     let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers_chunk_size!(0, 8184, 4092);
     #[cfg(not(feature = "emugbc"))]
-    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(2048, 32000);
+    // dma_CIRCULAR_buffers!: read_dma_circular needs >=3 descriptors for a small RX ring
+    // (the plain dma_buffers! gives a 2 KB buffer only 1 descriptor -> OutOfDescriptors).
+    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(2048, 32000);
     let i2s = I2s::new(
         peripherals.I2S0,
         peripherals.DMA_CH0,
