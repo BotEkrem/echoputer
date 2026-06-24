@@ -2,14 +2,14 @@
 //! scannable QR code on screen. Pure offline: no SD, no radio. The matrix is drawn
 //! dark-on-white with a quiet-zone border so a phone camera can read it off the panel.
 //!
-//! The encoder lives in [`crate::apps::qr_encode`] (a small no_std QR generator). Both
+//! The encoder lives in [`crate::apps::misc::qr_encode`] (a small no_std QR generator). Both
 //! the input buffer and the generated matrix are heap-backed, so this app's resident
 //! footprint is a handful of bytes — it never bloats the (tight) main stack frame.
 
 use alloc::vec::Vec;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 
-use crate::apps::qr_encode::Qr as QrCode;
+use crate::apps::misc::qr_encode::Qr as QrCode;
 use crate::hal::keymap;
 use crate::{i18n, theme};
 

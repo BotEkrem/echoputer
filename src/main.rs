@@ -21,6 +21,7 @@
 mod hal; // board drivers + framebuffer + keymap
 mod radio; // WiFi/BLE stack + attack/portal/scan payloads
 mod apps; // launcher + the app screens
+mod config; // central user-settings struct (load/save); edited by apps::settings
 mod i18n;
 mod palette; // per-app accent colours (HSV hue wheel)
 mod theme;
@@ -288,7 +289,7 @@ fn main() -> ! {
         browser::DummyTimeSource // VolumeManager::device requires the closure to return T
     });
 
-    let mut config = settings::Config::new();
+    let mut config = crate::config::Config::new();
     config.load(&vm); // best-effort: no card / no file -> defaults
     config.apply_lang(); // set UI language before the first frame is drawn
     // (accent is set per-app from the palette wheel — see menu::draw / app entry)

@@ -5,10 +5,15 @@
 
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 
-use crate::apps::g2048::G2048;
-use crate::apps::pong::Pong;
-use crate::apps::snake::Snake;
-use crate::apps::tetris::Tetris;
+pub mod g2048;
+pub mod pong;
+pub mod snake;
+pub mod tetris;
+
+use crate::apps::games::g2048::G2048;
+use crate::apps::games::pong::Pong;
+use crate::apps::games::snake::Snake;
+use crate::apps::games::tetris::Tetris;
 use crate::{i18n, theme};
 
 /// Display names (language-neutral; arcade titles stay as-is). With the emulator

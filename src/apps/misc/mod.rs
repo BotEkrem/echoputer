@@ -12,16 +12,28 @@ use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 use embedded_hal::i2c::I2c;
 use embedded_sdmmc::{BlockDevice, TimeSource, VolumeManager};
 
-use crate::apps::calc::Calc;
-use crate::apps::chip8::Chip8;
-use crate::apps::convert::Convert;
-use crate::apps::dice::Dice;
-use crate::apps::ir::Ir;
-use crate::apps::level::Level;
-use crate::apps::qr::Qr;
+pub mod calc;
+pub mod chip8;
+pub mod convert;
+pub mod dice;
+pub mod ir;
+pub mod level;
+pub mod qr;
+pub mod qr_encode;
 #[cfg(not(feature = "emugbc"))]
-use crate::apps::recorder::Recorder;
-use crate::apps::stepcount::StepCount;
+pub mod recorder;
+pub mod stepcount;
+
+use crate::apps::misc::calc::Calc;
+use crate::apps::misc::chip8::Chip8;
+use crate::apps::misc::convert::Convert;
+use crate::apps::misc::dice::Dice;
+use crate::apps::misc::ir::Ir;
+use crate::apps::misc::level::Level;
+use crate::apps::misc::qr::Qr;
+#[cfg(not(feature = "emugbc"))]
+use crate::apps::misc::recorder::Recorder;
+use crate::apps::misc::stepcount::StepCount;
 use crate::hal::ir::IrTx;
 use crate::{i18n, theme};
 
