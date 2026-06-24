@@ -69,7 +69,7 @@ pub struct DetResult {
 // The promiscuous RX callback is a bare `fn` (no captures), so it can only reach
 // statics. These are reset at the start of every detector run.
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 static DET_DEAUTH: AtomicU32 = AtomicU32::new(0);
 static DET_DISASSOC: AtomicU32 = AtomicU32::new(0);
@@ -113,6 +113,25 @@ fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
             i += 1;
         }
     }
+}
+
+// ---------------------- global STA link state ----------------------
+// One persistent association can outlive any single app, so the topbar reads
+// this each frame to show a connectivity indicator. Plain atomic (no lock):
+// writes happen only on the main loop's radio ops, reads in the per-frame draw.
+static WIFI_LINK: AtomicBool = AtomicBool::new(false);
+
+/// True once associated AND a DHCP lease was obtained. NOT a guarantee of real
+/// internet reachability — just link-up with an IP (the honest cheap signal).
+pub fn wifi_connected() -> bool {
+    WIFI_LINK.load(Ordering::Relaxed)
+}
+
+/// Clear the link state. Funnelled through `deinit_wifi` so EVERY WiFi teardown
+/// path (disconnect, Player/emulator `shutdown`, a BLE op stealing the radio,
+/// a failed associate) clears the indicator — it can never go stale.
+fn clear_link() {
+    WIFI_LINK.store(false, Ordering::Relaxed);
 }
 
 /// A future that resolves once `dur` has elapsed since `start`. It busy-wakes, so
@@ -244,6 +263,7 @@ impl Radio {
     fn deinit_wifi(&mut self) {
         self.wifi_ifaces = None;
         self.wifi_ctrl = None;
+        clear_link(); // the single chokepoint that keeps the topbar indicator honest
     }
 
     /// Tear down BLE, freeing its heap (BleConnector::drop -> ble_deinit).
@@ -568,14 +588,12 @@ impl Radio {
 
     // ------------------------------ web ui -----------------------------
 
-    /// Join `ssid` (with `pw`, or open if `pw` is empty) as a station, then serve
-    /// the HTTP file/system dashboard on the leased IP until `tick` aborts. The STA
-    /// is torn down on exit. Returns `None` if association fails (wrong password /
-    /// weak signal surface as a timeout, not a hang).
-    pub fn run_webui<D, T>(
+    /// Serve the Web UI dashboard on the EXISTING global STA connection. Unlike
+    /// the old `run_webui`, it does NOT associate and does NOT tear the link down
+    /// afterwards — the connection is shared/persistent (established once via
+    /// [`Radio::connect_sta`]). Returns `None` if not currently connected.
+    pub fn serve_webui<D, T>(
         &mut self,
-        ssid: &str,
-        pw: &str,
         vm: &embedded_sdmmc::VolumeManager<D, T>,
         sys: &webui::SysSnapshot,
         tick: impl FnMut(&webui::ServeState) -> bool,
@@ -584,46 +602,71 @@ impl Radio {
         D: embedded_sdmmc::BlockDevice,
         T: embedded_sdmmc::TimeSource,
     {
+        if !wifi_connected() {
+            return None;
+        }
+        let sta = self.wifi_ifaces.as_ref()?.station;
+        let mac = sta.mac_address();
+        Some(webui::serve(sta, mac, vm, sys, tick))
+    }
+
+    // -------------------- global internet connection -------------------
+
+    /// Associate with `ssid` (open if `pw` is empty), pull a DHCP lease, and —
+    /// unlike `run_webui` — LEAVE the STA up so the link persists across apps.
+    /// Returns the leased IP, or `None` on failure/abort (link torn down then).
+    /// `tick() -> false` aborts during the DHCP wait. Updates the global link
+    /// state read by the topbar indicator.
+    pub fn connect_sta(&mut self, ssid: &str, pw: &str, tick: impl FnMut() -> bool) -> Option<[u8; 4]> {
         use embassy_futures::select::{select, Either};
         use esp_radio::wifi::sta::StationConfig;
-        use esp_radio::wifi::{self, AuthenticationMethod, Config};
-        self.deinit_ble();
-        self.deinit_wifi();
-        let w = self
-            .wifi_periph
-            .take()
-            .unwrap_or_else(|| unsafe { esp_hal::peripherals::WIFI::steal() });
-        let (mut c, ifs) = match wifi::new(w, Default::default()) {
-            Ok(x) => x,
-            Err(_) => return None,
-        };
+        use esp_radio::wifi::{AuthenticationMethod, Config};
+        if !self.ensure_wifi() {
+            return None;
+        }
         let cfg = if pw.is_empty() {
             StationConfig::default().with_ssid(ssid).with_auth_method(AuthenticationMethod::None)
         } else {
             StationConfig::default().with_ssid(ssid).with_password(pw.into())
         };
-        if c.set_config(&Config::Station(cfg)).is_err() {
-            return None;
-        }
-        let sta = ifs.station;
-        let mac = sta.mac_address();
-        // associate with a 15 s cap so a bad password / weak signal fails cleanly.
-        let associated = matches!(
-            embassy_futures::block_on(select(
-                c.connect_async(),
-                Deadline { start: Instant::now(), dur: Duration::from_secs(15) },
-            )),
-            Either::First(Ok(_))
-        );
-        self.wifi_ctrl = Some(c);
-        self.wifi_ifaces = Some(ifs);
+        // set_config + associate (15 s cap), then drop the &mut wifi_ctrl borrow
+        // before any deinit_wifi (which needs &mut self).
+        let associated = {
+            let c = self.wifi_ctrl.as_mut()?;
+            if c.set_config(&Config::Station(cfg)).is_err() {
+                false
+            } else {
+                matches!(
+                    embassy_futures::block_on(select(
+                        c.connect_async(),
+                        Deadline { start: Instant::now(), dur: Duration::from_secs(15) },
+                    )),
+                    Either::First(Ok(_))
+                )
+            }
+        };
         if !associated {
             self.deinit_wifi();
             return None;
         }
-        let res = webui::serve(sta, mac, vm, sys, tick);
+        let sta = self.wifi_ifaces.as_ref()?.station;
+        let mac = sta.mac_address();
+        match webui::dhcp_only(sta, mac, tick) {
+            Some(ip) => {
+                WIFI_LINK.store(true, Ordering::Relaxed);
+                Some(ip)
+            }
+            None => {
+                self.deinit_wifi();
+                None
+            }
+        }
+    }
+
+    /// Drop the global STA association (and its heap). Clears the link indicator
+    /// via the `deinit_wifi` chokepoint.
+    pub fn disconnect_sta(&mut self) {
         self.deinit_wifi();
-        Some(res)
     }
 
     // ------------------------------- BLE -------------------------------

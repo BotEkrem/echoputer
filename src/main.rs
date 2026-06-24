@@ -349,6 +349,9 @@ fn main() -> ! {
     let mut settings_ui = settings::Settings::new();
     let mut hacking = hacking::Hacking::new();
     let mut webui = webui::WebUi::new();
+    // true when the shared WiFi picker was opened from the "Internet" menu item
+    // (connect-and-stay) rather than the Web UI item (connect-then-serve).
+    let mut wifi_connect_only = false;
     let mut player = player::Player::new();
     let mut repl = repl::Repl::new();
     let mut games = games::Games::new();
@@ -716,6 +719,7 @@ fn main() -> ! {
                             status_dots(&mut fbuf, audio_ok, kbd_ok);
                         }
                         menu::AppKind::WebUi => {
+                            wifi_connect_only = false; // connect, then serve the dashboard
                             screen = Screen::WebUi;
                             synth.silence();
                             webui.enter(&mut fbuf); // "scanning WiFi..."
@@ -796,6 +800,35 @@ fn main() -> ! {
                             synth.silence();
                             notes.enter(&vm, &mut fbuf);
                         }
+                        // The global WiFi connection. Connected -> disconnect; else
+                        // open the SHARED WiFi picker (the same scan/list/password UI
+                        // as Web UI). On connect we STAY connected — see
+                        // Action::Connect + `wifi_connect_only`.
+                        menu::AppKind::Internet => {
+                            synth.silence();
+                            if radio::wifi_connected() {
+                                radio.disconnect_sta();
+                                menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                            } else {
+                                wifi_connect_only = true;
+                                screen = Screen::WebUi;
+                                webui.enter(&mut fbuf); // "scanning WiFi..."
+                                let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                webui.begin_scan();
+                                match radio.scan() {
+                                    Some(aps) => {
+                                        for ap in &aps {
+                                            let secured = ap.auth != "open";
+                                            webui.push_ap(ap.ssid.as_bytes(), ap.rssi, ap.channel, ap.auth, secured);
+                                        }
+                                    }
+                                    None => webui.mark_scan_failed(),
+                                }
+                                webui.show_list(&mut fbuf);
+                                webui.clear_known();
+                                radio::webui::load_creds(&vm, |ssid, pw| webui.add_known(ssid, pw));
+                            }
+                        }
                     },
                     _ => {}
                 },
@@ -837,9 +870,7 @@ fn main() -> ! {
                 Screen::Emu => {}
                 Screen::WebUi => match webui.on_key(rc, &mut fbuf) {
                     webui::Action::Connect => {
-                        // Copy ssid/pw into owned buffers so `webui` is free for the
-                        // tick repaint (the borrow checker won't let us hold a &str
-                        // into `webui` while the closure mutates it).
+                        // Copy ssid/pw out so `webui` is free for the tick repaint.
                         let mut ssid_b = [0u8; 32];
                         let s = webui.ssid().as_bytes();
                         let sl = s.len().min(32);
@@ -851,63 +882,81 @@ fn main() -> ! {
                         let ssid = core::str::from_utf8(&ssid_b[..sl]).unwrap_or("");
                         let pw = core::str::from_utf8(&pw_b[..pl]).unwrap_or("");
 
-                        let mac = esp_hal::efuse::base_mac_address();
-                        let mb = mac.as_bytes();
-                        let sys = radio::webui::SysSnapshot {
-                            heap_free: esp_alloc::HEAP.free(),
-                            heap_used: esp_alloc::HEAP.used(),
-                            heap_total: esp_alloc::HEAP.stats().size,
-                            uptime_s: sysinfo.uptime_s(),
-                            batt_pct: if battery::present() { battery::level() as i32 } else { -1 },
-                            mac: [mb[0], mb[1], mb[2], mb[3], mb[4], mb[5]],
-                        };
-
+                        // Establish the ONE shared, persistent connection — used by
+                        // the Internet item and the Web UI dashboard alike. Abortable.
                         webui.draw_status(&mut fbuf, webui::Phase::Connecting);
                         let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
-                        let mut last = Instant::now();
-                        let res = radio.run_webui(ssid, pw, &vm, &sys, |st| {
-                            let mut stop = false;
-                            while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
-                                if ev.pressed {
+                        let ok = radio
+                            .connect_sta(ssid, pw, || {
+                                let mut stop = false;
+                                while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                    if ev.pressed {
+                                        stop = true;
+                                    }
+                                }
+                                if g0.is_low() {
                                     stop = true;
                                 }
-                            }
-                            if g0.is_low() {
-                                stop = true;
-                            }
-                            if stop {
-                                return false;
-                            }
-                            if last.elapsed() >= Duration::from_millis(180) {
-                                last = Instant::now();
-                                let phase = match st.phase {
-                                    radio::webui::Phase::Serving => {
-                                        webui::Phase::Serving { ip: st.ip, hits: st.hits }
-                                    }
-                                    _ => webui::Phase::Connecting,
-                                };
-                                webui.draw_status(&mut fbuf, phase);
-                                let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
-                            }
-                            true
-                        });
+                                !stop
+                            })
+                            .is_some();
                         g0_prev_low = g0.is_low();
-                        if res.is_some() {
-                            // association succeeded -> the password is good, remember it
-                            radio::webui::save_cred(&vm, ssid, pw);
+                        if ok {
+                            radio::webui::save_cred(&vm, ssid, pw); // good password -> remember
                         }
-                        match res {
-                            Some(st) if matches!(st.phase, radio::webui::Phase::Serving) => {
-                                // user stopped the dashboard -> home menu
-                                screen = Screen::Menu;
-                                menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                            }
-                            _ => {
-                                webui.draw_status(
-                                    &mut fbuf,
-                                    webui::Phase::Failed(i18n::t("connect failed", "baglanti yok")),
-                                );
-                            }
+
+                        if !ok {
+                            webui.draw_status(
+                                &mut fbuf,
+                                webui::Phase::Failed(i18n::t("connect failed", "baglanti yok")),
+                            );
+                        } else if wifi_connect_only {
+                            // came from the Internet item -> stay connected, go home.
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        } else {
+                            // Web UI dashboard: serve on the shared connection, which
+                            // persists afterwards (the link is NOT torn down here).
+                            let mac = esp_hal::efuse::base_mac_address();
+                            let mb = mac.as_bytes();
+                            let sys = radio::webui::SysSnapshot {
+                                heap_free: esp_alloc::HEAP.free(),
+                                heap_used: esp_alloc::HEAP.used(),
+                                heap_total: esp_alloc::HEAP.stats().size,
+                                uptime_s: sysinfo.uptime_s(),
+                                batt_pct: if battery::present() { battery::level() as i32 } else { -1 },
+                                mac: [mb[0], mb[1], mb[2], mb[3], mb[4], mb[5]],
+                            };
+                            let mut last = Instant::now();
+                            let _ = radio.serve_webui(&vm, &sys, |st| {
+                                let mut stop = false;
+                                while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                    if ev.pressed {
+                                        stop = true;
+                                    }
+                                }
+                                if g0.is_low() {
+                                    stop = true;
+                                }
+                                if stop {
+                                    return false;
+                                }
+                                if last.elapsed() >= Duration::from_millis(180) {
+                                    last = Instant::now();
+                                    let phase = match st.phase {
+                                        radio::webui::Phase::Serving => {
+                                            webui::Phase::Serving { ip: st.ip, hits: st.hits }
+                                        }
+                                        _ => webui::Phase::Connecting,
+                                    };
+                                    webui.draw_status(&mut fbuf, phase);
+                                    let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                }
+                                true
+                            });
+                            g0_prev_low = g0.is_low();
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                         }
                     }
                     webui::Action::Redraw | webui::Action::None => {}

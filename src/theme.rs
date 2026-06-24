@@ -110,7 +110,8 @@ pub fn topbar(d: &mut impl DrawTarget<Color = Rgb565>, title: &str) {
 
 /// Top-right battery indicator (icon + %). Reads the global battery state.
 pub fn draw_battery(d: &mut impl DrawTarget<Color = Rgb565>, x_right: i32, y: i32) {
-    fill(d, x_right - 52, y, 52, 13, BG);
+    fill(d, x_right - 66, y, 66, 13, BG); // band widened to also cover the WiFi glyph
+    wifi_icon(d, x_right - 64, y);
     if !crate::hal::battery::present() {
         text_right(d, "--", x_right, y + 1, BODY_FONT, MUTED);
         return;
@@ -121,6 +122,25 @@ pub fn draw_battery(d: &mut impl DrawTarget<Color = Rgb565>, x_right: i32, y: i3
     text_right(d, s, x_right, y + 1, BODY_FONT, MUTED);
     let tw = s.len() as i32 * 6;
     batt_icon(d, x_right - tw - 4 - 16, y, lvl);
+}
+
+/// Connectivity glyph just left of the battery — deliberately unmistakable at a
+/// glance: bright accent rising bars when the global STA link is up; dim bars
+/// with a diagonal slash through them when it's down. Allocation-free and
+/// branch-only (it runs in every topbar repaint).
+fn wifi_icon(d: &mut impl DrawTarget<Color = Rgb565>, x: i32, y: i32) {
+    let on = crate::radio::wifi_connected();
+    let col = if on { accent() } else { FAINT };
+    let base = y + 11;
+    for (i, &h) in [3i32, 6, 9].iter().enumerate() {
+        fill(d, x + i as i32 * 4, base - h, 3, h as u32, col);
+    }
+    if !on {
+        // diagonal slash = unmistakably "not connected"
+        let _ = Line::new(Point::new(x - 1, y + 2), Point::new(x + 11, y + 11))
+            .into_styled(PrimitiveStyle::with_stroke(MUTED, 1))
+            .draw(d);
+    }
 }
 
 fn batt_icon(d: &mut impl DrawTarget<Color = Rgb565>, x: i32, y: i32, lvl: u8) {

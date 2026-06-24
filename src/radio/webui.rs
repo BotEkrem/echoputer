@@ -206,6 +206,37 @@ pub fn save_cred<D: BlockDevice, T: TimeSource>(vm: &VolumeManager<D, T>, ssid: 
     })();
 }
 
+/// Pull just a DHCP lease on an already-associated STA, returning the leased
+/// IPv4 octets (or `None` on abort/timeout). Used by the global "connect to
+/// internet" flow which — unlike [`serve`] — keeps the association up afterwards
+/// and discards this throwaway interface. `tick() -> false` aborts.
+pub fn dhcp_only(sta: WifiIface<'static>, mac: [u8; 6], mut tick: impl FnMut() -> bool) -> Option<[u8; 4]> {
+    let mut device = WifiPhy::new(sta);
+    let t0 = Instant::now();
+    let now = |t0: Instant| SmolInstant::from_millis(t0.elapsed().as_millis() as i64);
+
+    let mut cfg = Config::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
+    cfg.random_seed = t0.duration_since_epoch().as_micros() | 1;
+    let mut iface = Interface::new(cfg, &mut device, now(t0));
+
+    let mut storage = [SocketStorage::EMPTY; 2];
+    let mut sockets = SocketSet::new(&mut storage[..]);
+    let dhcp_h = sockets.add(dhcpv4::Socket::new());
+
+    loop {
+        iface.poll(now(t0), &mut device, &mut sockets);
+        if let Some(dhcpv4::Event::Configured(c)) = sockets.get_mut::<dhcpv4::Socket>(dhcp_h).poll() {
+            return Some(c.address.address().octets());
+        }
+        if !tick() {
+            return None;
+        }
+        if t0.elapsed() >= Duration::from_secs(12) {
+            return None;
+        }
+    }
+}
+
 /// Serve until `tick(&ServeState)` returns false (the user aborts). `vm` is the
 /// SD volume manager; `sys` is the dashboard's system page.
 pub fn serve<D: BlockDevice, T: TimeSource>(

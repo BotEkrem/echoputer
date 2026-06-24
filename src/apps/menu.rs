@@ -26,6 +26,7 @@ pub enum AppKind {
     Charge,
     Settings,
     Sysinfo,
+    Internet,
 }
 
 pub struct App {
@@ -35,7 +36,7 @@ pub struct App {
 // Display order only. The icon, name, sub and action are all keyed off `kind`,
 // NOT the array position, so reordering this list rearranges the menu. The Game
 // Boy emulator is not a top-level app — it lives inside the Games launcher.
-pub const APPS: [App; 13] = [
+pub const APPS: [App; 14] = [
     App { kind: AppKind::Hacking },
     App { kind: AppKind::Repl },
     App { kind: AppKind::Synth },
@@ -49,6 +50,7 @@ pub const APPS: [App; 13] = [
     App { kind: AppKind::Charge },
     App { kind: AppKind::Settings },
     App { kind: AppKind::Sysinfo },
+    App { kind: AppKind::Internet },
 ];
 
 /// Localised display name for an app (resolved at draw time so it follows the
@@ -68,6 +70,7 @@ fn app_name(k: AppKind) -> &'static str {
         AppKind::Charge => i18n::t("Charge", "Sarj"),
         AppKind::Settings => i18n::t("Settings", "Ayarlar"),
         AppKind::Sysinfo => i18n::t("System", "Sistem"),
+        AppKind::Internet => "Internet",
     }
 }
 
@@ -86,6 +89,7 @@ fn app_sub(k: AppKind) -> &'static str {
         AppKind::Charge => i18n::t("battery status / charging", "pil durumu / sarj"),
         AppKind::Settings => i18n::t("theme + app preferences", "tema + uygulama ayarlari"),
         AppKind::Sysinfo => i18n::t("device info + stats", "cihaz bilgi + durum"),
+        AppKind::Internet => i18n::t("connect / disconnect WiFi", "internete baglan / kes"),
     }
 }
 
@@ -206,6 +210,15 @@ fn draw_icon(d: &mut impl DrawTarget<Color = Rgb565>, kind: AppKind, x: i32, y: 
             // three dots — the universal "more / misc" glyph
             for i in 0..3i32 {
                 let _ = Circle::new(Point::new(x + 1 + i * 6, y + 6), 4).into_styled(fl).draw(d);
+            }
+        }
+        AppKind::Internet => {
+            // four rising signal bars — connectivity
+            for i in 0..4i32 {
+                let h = 3 + i * 4;
+                let _ = Rectangle::new(Point::new(x + i * 5, y + 15 - h), Size::new(3, h as u32))
+                    .into_styled(fl)
+                    .draw(d);
             }
         }
     }
