@@ -42,13 +42,6 @@ impl Ir {
     /// is no transient heap to release.
     pub fn exit(&mut self) {}
 
-    /// True only while the Custom-code row is selected — main then routes Backspace to
-    /// `on_key` (delete a hex nibble) instead of "go back". On a preset row Backspace
-    /// should leave the app, so this is false there.
-    pub fn is_editing(&self) -> bool {
-        self.sel == CUSTOM
-    }
-
     pub fn on_key(&mut self, rc: (u8, u8), d: &mut impl DrawTarget<Color = Rgb565>) {
         match rc {
             crate::K_UP => {

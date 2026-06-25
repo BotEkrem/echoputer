@@ -1626,7 +1626,7 @@ impl Repl {
         theme::text(d, clip(&prompt), theme::PAD, y, theme::BODY_FONT, theme::accent());
 
         // "Aa ABC/abc" advertises the caps toggle and shows its current state.
-        let hint = format!("Aa {}   ENTER run   help   ` menu", if self.caps { "ABC" } else { "abc" });
+        let hint = format!("Aa {}   ENTER run   help   ESC menu", if self.caps { "ABC" } else { "abc" });
         theme::hint(d, &hint);
     }
 }

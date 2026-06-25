@@ -34,17 +34,17 @@ pub const CUSTOM: Msg = ["Custom", "Ozel"];
 
 pub const PLEASE_WAIT: Msg = ["please wait", "lutfen bekleyin"];
 
-pub const ENTER_OPEN_BACK: Msg = ["ENTER open   G0 back", "ENTER ac   G0 geri"];
+pub const ENTER_OPEN_BACK: Msg = ["ENTER open   ESC back", "ENTER ac   ESC geri"];
 
 pub const ATTACK: Msg = ["ATTACK", "SALDIRI"];
 pub const USE_TOOL: Msg = ["Use tool", "Araci kullan"];
 pub const WIKI: Msg = ["Wiki", "Wiki"];
 pub const SETTINGS: Msg = ["Settings", "Ayarlar"];
-pub const ENTER_SELECT_BACK: Msg = ["ENTER select   G0 back", "ENTER sec   G0 geri"];
+pub const ENTER_SELECT_BACK: Msg = ["ENTER select   ESC back", "ENTER sec   ESC geri"];
 
-pub const SCROLL_BACK: Msg = ["up/down scroll   G0 back", "yukari/asagi kaydir   G0 geri"];
+pub const SCROLL_BACK: Msg = ["up/down scroll   ESC back", "yukari/asagi kaydir   ESC geri"];
 
-pub const CFG_CHANGE_EDIT_BACK: Msg = ["left/right change   ENTER edit   G0 back", "sol/sag degistir   ENTER duzenle   G0 geri"];
+pub const CFG_CHANGE_EDIT_BACK: Msg = ["left/right change   ENTER edit   ESC back", "sol/sag degistir   ENTER duzenle   ESC geri"];
 
 pub const NAME_SOURCE: Msg = ["Name source", "Isim kaynagi"];
 pub const CUSTOM_NAME: Msg = ["Custom name", "Ozel isim"];
@@ -54,10 +54,10 @@ pub const AP_NAME: Msg = ["AP name", "AP adi"];
 pub const CUSTOM_SSID_NAME: Msg = ["Custom SSID name", "Ozel SSID adi"];
 pub const PORTAL_AP_NAME: Msg = ["Portal AP name", "Portal AP adi"];
 pub const BECOMES_NAME: Msg = ["becomes NAME001, NAME002 ...", "NAME001, NAME002 ... olur"];
-pub const TYPE_BKSP_OK_CANCEL: Msg = ["type   bksp delete   ENTER ok   G0 cancel", "yaz   bksp sil   ENTER tamam   G0 iptal"];
+pub const TYPE_BKSP_OK_CANCEL: Msg = ["type   bksp delete   ENTER ok   ESC cancel", "yaz   bksp sil   ENTER tamam   ESC iptal"];
 
 pub const ACTIVE_ATTACK: Msg = ["ACTIVE ATTACK", "AKTIF SALDIRI"];
-pub const ENTER_START_CANCEL: Msg = ["ENTER start   G0 cancel", "ENTER baslat   G0 iptal"];
+pub const ENTER_START_CANCEL: Msg = ["ENTER start   ESC cancel", "ENTER baslat   ESC iptal"];
 
 pub const NO_NETWORKS_FOUND: Msg = ["no networks found", "ag bulunamadi"];
 pub const HIDDEN: Msg = ["<hidden>", "<gizli>"];
@@ -70,7 +70,7 @@ pub const DEV: Msg = ["dev", "cihaz"];
 
 pub const DEAUTH_ATTACK_ALERT: Msg = ["! DEAUTH ATTACK !", "! DEAUTH SALDIRISI !"];
 pub const CLEAR: Msg = ["clear", "temiz"];
-pub const ENTER_RELISTEN_BACK: Msg = ["ENTER re-listen   G0 back", "ENTER tekrar dinle   G0 geri"];
+pub const ENTER_RELISTEN_BACK: Msg = ["ENTER re-listen   ESC back", "ENTER tekrar dinle   ESC geri"];
 
 pub const HANDSHAKE_CAPTURED: Msg = ["handshake captured", "handshake yakalandi"];
 pub const NO_HANDSHAKE: Msg = ["no handshake", "handshake yok"];
@@ -81,14 +81,14 @@ pub const OPEN_PORTS: Msg = ["open ports", "acik port"];
 pub const STOPPED: Msg = ["stopped", "durdu"];
 pub const ADVERTS: Msg = ["adverts", "reklam"];
 pub const FRAMES: Msg = ["frames", "cerceve"];
-pub const ENTER_RUN_AGAIN_BACK: Msg = ["ENTER run again   G0 back", "ENTER tekrar   G0 geri"];
+pub const ENTER_RUN_AGAIN_BACK: Msg = ["ENTER run again   ESC back", "ENTER tekrar   ESC geri"];
 
 pub const RADIO_ERROR: Msg = ["radio error", "radyo hatasi"];
 pub const ENTER_TO_RETRY: Msg = ["ENTER to retry", "ENTER tekrar dene"];
-pub const ENTER_RETRY_BACK: Msg = ["ENTER retry   G0 back", "ENTER tekrar   G0 geri"];
+pub const ENTER_RETRY_BACK: Msg = ["ENTER retry   ESC back", "ENTER tekrar   ESC geri"];
 
 pub const ATTACK_RUNNING: Msg = ["ATTACK RUNNING", "SALDIRI CALISIYOR"];
-pub const ANY_KEY_TO_STOP: Msg = ["any key / G0 to stop", "durdurmak icin tus / G0"];
+pub const ANY_KEY_TO_STOP: Msg = ["any key to stop", "durdurmak icin tus"];
 
 pub const CAPTURED: Msg = ["captured", "yakalanan"];
 pub const PHASE: Msg = ["phase", "asama"];

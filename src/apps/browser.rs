@@ -470,10 +470,10 @@ impl Browser {
             theme::draw_battery(d, theme::W - theme::PAD, 3);
             line(d, 16);
             fill(d, 0, H - 13, W as u32, 13, BG);
-            text(d, "enter open   < up   DEL del   ` menu", 4, H - 11, &FONT_6X10, FAINT);
+            text(d, "enter open   < up   DEL del   ESC menu", 4, H - 11, &FONT_6X10, FAINT);
             if !self.ok {
                 text(d, "No SD card or not FAT32.", 6, 50, &FONT_6X10, ERR);
-                text(d, "Insert a card, press ` then", 6, 66, &FONT_6X10, DIM);
+                text(d, "Insert a card, press ESC then", 6, 66, &FONT_6X10, DIM);
                 text(d, "re-open File Browser.", 6, 78, &FONT_6X10, DIM);
             } else if self.count == 0 {
                 text(d, "(empty folder)", 6, 50, &FONT_6X10, DIM);

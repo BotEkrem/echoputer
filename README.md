@@ -28,7 +28,7 @@ Hacking is the security toolkit and has its own section below. The rest:
   lists the syntax. A step budget and a recursion cap keep a bad script from
   hanging or crashing the device.
 - Games is a small arcade launcher: Snake, 2048, Tetris and Pong. Pick one from
-  the list and play; G0/Backspace steps back to the list, then to the home menu.
+  the list and play; ESC steps back (to the list, then the home menu).
   They share one keyboard interface, so the arrow cluster steers/moves and ENTER
   acts (serve, hard-drop) where it applies. Built with `--features emu` (or
   `emugbc` for colour) it gains a fifth entry, **Game Boy**: an emulator over a
@@ -39,8 +39,8 @@ Hacking is the security toolkit and has its own section below. The rest:
   to the full panel, with sound through the codec (G0 cycles the volume in-game).
   The cartridge battery save is mirrored to a `.sav` next to the ROM, flushed
   periodically and on exit, so progress survives a power-cut. Controls: the arrow
-  cluster is the D-pad, `l`/`k` are A/B, ENTER is Start, Space is Select; `` ` ``
-  or Backspace leaves the game (saving first).
+  cluster is the D-pad, `l`/`k` are A/B, ENTER is Start, Space is Select; ESC
+  (the `` ` `` top-left key) leaves the game (saving first).
 - Web UI puts the device on your WiFi and serves a dashboard you open from a PC.
   It scans for networks, you pick one and type the password (networks you've
   joined are remembered, so the password comes pre-filled next time), and once
@@ -57,7 +57,7 @@ Hacking is the security toolkit and has its own section below. The rest:
   speaker's bandwidth the difference from a higher rate is inaudible, and the shared
   audio pipeline stays untouched. ENTER (or G0) plays/pauses, left/right seek ±10 s,
   up/down change volume, `[`/`]` step to the previous/next track, and a track auto-
-  advances to the next at its end. `` ` `` or Backspace leaves.
+  advances to the next at its end. ESC leaves.
 - Synthwave turns the keyboard into a small wavetable synth. Notes are quantised
   to a scale, with pitch rising left to right and bottom to top, so mashing keys
   still comes out musical. G0 cycles the scale and the LED pulses with the audio.
@@ -77,13 +77,16 @@ Hacking is the security toolkit and has its own section below. The rest:
   length, mass, temperature and data; **Dice**, dice presets (d4–d100 and a coin)
   plus a custom "random between X and Y" range you type in; **QR**, which turns
   typed text — a URL, a WiFi string — into a scannable QR code on the panel; **IR**,
-  a transmit-only remote that fires NEC codes from the onboard IR LED on GPIO44
-  (a few well-known TV-power presets plus a custom 32-bit code entered in hex; aim
-  the top edge at the device); **Level**, a bubble level off the BMI270 IMU (lay it
+  a transmit-only remote on the onboard IR LED (GPIO44, RMT hardware carrier). Its one
+  button, **Power: ALL TVs**, blasts every brand's power code across four protocols
+  (NEC, Philips RC5/RC6, Sony SIRC) so aiming at almost any TV and pressing ENTER
+  toggles it; a Custom row sends a hand-entered 32-bit NEC code. (Aim the top edge at
+  the device.) **Level**, a bubble level off the BMI270 IMU (lay it
   flat and the ball centres, tilt it and the ball rolls, with the tilt angle shown);
   **Steps**, a step counter off the same accelerometer (ENTER resets); and
   **Keyboard/Mouse**, which turns the Cardputer into a USB HID keyboard + mouse.
-  `` ` ``/Backspace steps back to the list, then to the home menu.
+  ESC steps back (to the list, then the home menu); G0 puts the screen to sleep
+  (any key wakes it).
 - Charge is a full-screen battery gauge for leaving the device on the charger;
   the ADV only charges while it is powered on.
 - Settings holds the preferences, grouped into General, Synthwave and File
@@ -148,11 +151,13 @@ IMSI catcher, which would need a cellular radio the chip simply doesn't have.
 ## Controls
 
 Up and down move, ENTER selects, and left/right change a value where that makes
-sense. Backspace steps back one level; the backtick key in the top-left corner
-jumps straight to the home screen. The G0 button also steps back, except in
-Synthwave where it cycles the scale, in the Game Boy emulator where it cycles the
-volume, and on the charge screen where it blanks the display. The top bar shows
-battery percent and a fill icon on the right.
+sense. **ESC** (the backtick key in the top-left corner) steps back one level —
+menus aren't deeply nested, so that's all you need (there's no separate jump-to-
+home). **Backspace** is a normal key now: text fields delete with it, elsewhere it
+does nothing. The **G0** button puts the screen to sleep (any key wakes it), except
+where it has a real job — Synthwave cycles the scale, the Game Boy emulator and the
+Player control playback, and the Remote app toggles its USB/Bluetooth connection.
+The top bar shows battery percent and a fill icon on the right.
 
 ## Building and flashing
 
@@ -228,7 +233,7 @@ src/
 
   hal/          board drivers, the framebuffer and the keymap
     fb, battery, es8311, bmi270 (IMU + its 8 KB config blob), tca8418, ws2812,
-    ir (IR-LED NEC transmitter), keymap
+    ir (IR-LED NEC/RC5/RC6/Sony transmitter), keymap
 
   radio/        the WiFi/BLE stack the Hacking and Web UI apps drive
     mod.rs        Radio, the sole owner of the WiFi+BLE peripherals
@@ -242,7 +247,7 @@ src/
     menu, splash, repl, games (snake, g2048, tetris, pong), stopwatch, notes,
     sysinfo, synth, scales, ui, browser, webui, charge, settings, hacking, wiki
     misc          the Misc sub-launcher + its apps: chip8, calc, convert, dice,
-                  qr (+ qr_encode), ir (NEC remote), level + stepcount (BMI270 IMU),
+                  qr (+ qr_encode), ir (multi-protocol remote), level + stepcount (BMI270 IMU),
                   remote (USB HID keyboard + mouse)
     emu/          the Game Boy emulator (mod, ffi, rom, input, video), behind
                   --features emu; the vendored C cores live in vendor/
@@ -260,7 +265,7 @@ src/
 | Audio, ES8311 @ 0x18 + NS4150B | I2S0, BCLK 41, WS 43, DOUT 42 (playback only; the codec's mic ADC on DIN 46 is wired but unused — I2S RX capture is unresolved on esp-hal, a possible future feature) |
 | SD card | SPI3, SCK 40, MOSI 14, MISO 39, CS 12, FAT32 |
 | RGB LED, WS2812 | GPIO21 (RMT ch0) |
-| IR transmitter | GPIO44 (RMT ch1), 38 kHz NEC, transmit-only |
+| IR transmitter | GPIO44 (RMT ch1, ~38 kHz carrier), NEC/RC5/RC6/Sony, transmit-only (clear the RTC pad-hold on GPIO44 at boot or the pad stays frozen) |
 | Button, G0 | GPIO0 |
 | Battery sense | ADC on GPIO10, 2:1 divider |
 

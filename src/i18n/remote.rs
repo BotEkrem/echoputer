@@ -11,4 +11,4 @@ pub const SHIFT_ON: Msg = ["SHIFT", "SHIFT"];
 pub const BLE_SOON: Msg = ["Bluetooth HID: coming soon", "Bluetooth HID: yakinda"];
 pub const USB_WAIT: Msg = ["USB: waiting for host...", "USB: host bekleniyor..."];
 pub const USB_READY: Msg = ["USB: connected", "USB: bagli"];
-pub const HINT: Msg = ["Tab mode  G0 conn  Bksp exit", "Tab mod  G0 baglanti  Bksp cikis"];
+pub const HINT: Msg = ["Tab mode  G0 conn  ESC exit", "Tab mod  G0 baglanti  ESC cikis"];

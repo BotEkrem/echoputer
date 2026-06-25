@@ -204,10 +204,6 @@ impl WebUi {
         }
     }
 
-    /// True while typing the password (so main routes Backspace here, not to back).
-    pub fn is_editing(&self) -> bool {
-        self.view == View::Password
-    }
 
     pub fn toggle_caps<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         if self.view == View::Password {
@@ -359,7 +355,7 @@ impl WebUi {
             }
         }
         let hint = alloc::format!(
-            "{} {}   ENTER {}   G0",
+            "{} {}   ENTER {}   ESC",
             self.ap_count,
             i18n::t(webui::NETS),
             i18n::t(webui::CONNECT)

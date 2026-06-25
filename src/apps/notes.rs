@@ -59,10 +59,6 @@ impl Notes {
         }
     }
 
-    /// In the editor (so main routes Backspace to us as delete, not back-to-menu).
-    pub fn is_editing(&self) -> bool {
-        self.view == View::Edit
-    }
 
     // ----------------------------- SD I/O -----------------------------
 
@@ -289,7 +285,7 @@ impl Notes {
             }
         }
 
-        let hint = format!("ENTER nl  bksp  G0 save  {}", if self.caps { "ABC" } else { "abc" });
+        let hint = format!("ENTER nl  bksp  ESC save  {}", if self.caps { "ABC" } else { "abc" });
         theme::hint(d, &hint);
     }
 }

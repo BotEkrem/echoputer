@@ -16,12 +16,12 @@ const VOL_Y: i32 = 102;
 pub fn draw_static(d: &mut impl DrawTarget<Color = Rgb565>, mode: Mode, vol: u8) {
     theme::clear(d);
     theme::topbar(d, "Synthwave");
-    theme::badge(d, theme::W - theme::PAD - 52, 3, mode.name(), theme::accent());
+    theme::badge(d, theme::W - theme::PAD - 68, 3, mode.name(), theme::accent());
     theme::text(d, "LEVEL", theme::PAD, LABEL_Y, theme::BODY_FONT, theme::MUTED);
     draw_note(d, None, mode);
     draw_vu(d, 0.0, 0, mode);
     draw_volume(d, vol, mode);
-    theme::hint(d, "keys play    G0 scale    ` menu");
+    theme::hint(d, "keys play    G0 scale    ESC menu");
 }
 
 /// Big current note. `None` = idle.
@@ -59,7 +59,7 @@ pub fn draw_volume(d: &mut impl DrawTarget<Color = Rgb565>, vol: u8, _mode: Mode
 /// Re-draw the parts that depend on the accent after a scale switch.
 pub fn flash_mode(d: &mut impl DrawTarget<Color = Rgb565>, mode: Mode, vol: u8) {
     theme::fill(d, 120, 0, (theme::W - 120) as u32, 16, theme::BG);
-    theme::badge(d, theme::W - theme::PAD - 52, 3, mode.name(), theme::accent());
+    theme::badge(d, theme::W - theme::PAD - 68, 3, mode.name(), theme::accent());
     theme::draw_battery(d, theme::W - theme::PAD, 3);
     draw_note(d, None, mode);
     draw_vu(d, 0.0, 0, mode);

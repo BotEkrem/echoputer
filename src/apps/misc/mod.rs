@@ -123,26 +123,16 @@ impl Misc {
         }
     }
 
-    /// G0 button: in the Remote app it toggles the connection type (USB/Bluetooth)
-    /// and is consumed (stay in the app); everywhere else it behaves like Backspace
-    /// (back to the list, then a second press pops to the home menu).
-    pub fn g0<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>, d: &mut impl DrawTarget<Color = Rgb565>) -> bool {
+    /// G0 button: in the Remote app it toggles the connection type (USB/Bluetooth) — a real
+    /// function, so it returns `true` (main keeps the screen awake). Everywhere else G0 has no
+    /// Misc function: returns `false` so main puts the screen to sleep. (Going back is on ESC.)
+    pub fn g0(&mut self, d: &mut impl DrawTarget<Color = Rgb565>) -> bool {
         if self.active == Some(REMOTE) {
             self.remote.toggle_conn(d);
-            return true;
+            true
+        } else {
+            false
         }
-        self.back(sd, d)
-    }
-
-    /// True when an active input item (Calc/Convert/Dice/QR) needs Backspace to
-    /// DELETE a character rather than exit — main exempts it from the global back.
-    pub fn is_editing(&self) -> bool {
-        // Calc/Convert/Dice/QR delete on Backspace; IR deletes a hex nibble only on its
-        // Custom row; the Remote USB keyboard sends Backspace to the HOST — all need it
-        // routed to on_key, not "go back".
-        matches!(self.active, Some(1 | 2 | 3 | 4))
-            || (self.active == Some(5) && self.ir.is_editing())
-            || self.remote_typing()
     }
 
     /// "Aa" caps/shift toggle for the active item (only QR consumes it today).
@@ -156,12 +146,6 @@ impl Misc {
     /// auto-repeat so a held key sends ONE HID report (no host-side spam).
     pub fn remote_typing(&self) -> bool {
         self.active == Some(REMOTE) && self.remote.is_typing()
-    }
-
-    /// Free/finalise any running item (used when jumping straight home with `).
-    pub fn leave<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>) {
-        self.exit_active(sd);
-        self.active = None;
     }
 
     #[inline(never)]

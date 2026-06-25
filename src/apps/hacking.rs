@@ -846,11 +846,6 @@ impl Hacking {
         self.view = View::Running;
     }
 
-    /// True while a text field is open (so main lets Backspace edit text instead
-    /// of treating it as "go back").
-    pub fn is_editing(&self) -> bool {
-        self.view == View::TextInput
-    }
 
     // ----------------------------- drawing -----------------------------
     pub fn draw_busy<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, title: &str, msg: &str) {
@@ -1080,10 +1075,10 @@ impl Hacking {
             }
         }
         if select {
-            let h = alloc::format!("{} {}   G0", i18n::t(hacking::ENTER), self.pending.target_verb());
+            let h = alloc::format!("{} {}   ESC", i18n::t(hacking::ENTER), self.pending.target_verb());
             theme::hint(d, &h);
         } else {
-            let hint = alloc::format!("{} {}   ENTER {}   G0", self.ap_count, i18n::t(hacking::NETS), i18n::t(hacking::RESCAN));
+            let hint = alloc::format!("{} {}   ENTER {}   ESC", self.ap_count, i18n::t(hacking::NETS), i18n::t(hacking::RESCAN));
             theme::hint(d, &hint);
         }
     }
@@ -1125,7 +1120,7 @@ impl Hacking {
             theme::text(d, &lbl, x, base_y + 3, theme::BODY_FONT, lcol);
         }
         theme::hline(d, base_y + 1, theme::BORDER);
-        let hint = alloc::format!("{} {}   ENTER {}   G0", self.ap_count, i18n::t(hacking::NETS), i18n::t(hacking::RESCAN));
+        let hint = alloc::format!("{} {}   ENTER {}   ESC", self.ap_count, i18n::t(hacking::NETS), i18n::t(hacking::RESCAN));
         theme::hint(d, &hint);
     }
 
@@ -1161,7 +1156,7 @@ impl Hacking {
                 theme::text_right(d, &info, theme::W - theme::PAD, y, theme::BODY_FONT, theme::MUTED);
             }
         }
-        let hint = alloc::format!("{} {}   ENTER {}   G0", self.ble_count, i18n::t(hacking::DEV), i18n::t(hacking::RESCAN));
+        let hint = alloc::format!("{} {}   ENTER {}   ESC", self.ble_count, i18n::t(hacking::DEV), i18n::t(hacking::RESCAN));
         theme::hint(d, &hint);
     }
 

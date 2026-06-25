@@ -3,8 +3,10 @@
 //! Brings up the hardware at boot, then drops into a home screen you launch apps
 //! from: Hacking (WiFi/BLE recon + attack tools), Synthwave, File Browser, Charge,
 //! Settings. Everything runs bare-metal on the ESP32-S3 — no IDF app framework.
-//! Controls: home screen ↑/↓ + ENTER. In an app, ` (top-left) jumps home, Backspace
-//! steps back one level (in Synthwave, G0 cycles the scale).
+//! Controls: home screen ↑/↓ + ENTER. ESC (the ` top-left key) goes BACK one level.
+//! Backspace is a normal key (text apps delete with it). G0 toggles the screen to sleep
+//! (any key wakes it) — except where it has a real function (Synthwave: cycle the mode;
+//! Player/Emu: playback; Remote: USB/BLE toggle).
 //!
 //! Hardware (Cardputer ADV):
 //!   Display  ST7789V2 240x135  SPI2: SCK=36 MOSI=35 CS=37 DC=34 RST=33 BL=38(PWM)
@@ -89,8 +91,7 @@ const ROOT_MIDI: u8 = 48;
 const CHUNK_FRAMES: usize = 256;
 
 // Named keys (logical row, col).
-const K_HOME: (u8, u8) = (0, 0); // ` key: jump straight back to the launcher
-const K_BACKSPACE: (u8, u8) = (0, 13); // back one step (G0 also works, but is awkward to press)
+const K_HOME: (u8, u8) = (0, 0); // the ` (top-left / ESC) key: go BACK one level
 pub(crate) const K_UP: (u8, u8) = (2, 11);
 pub(crate) const K_DOWN: (u8, u8) = (3, 11);
 pub(crate) const K_LEFT: (u8, u8) = (3, 10);
@@ -667,16 +668,10 @@ fn main() -> ! {
             #[cfg(feature = "emu")]
             if screen == Screen::Emu {
                 let rc = (ev.row, ev.col);
-                if ev.pressed && (rc == K_HOME || rc == K_BACKSPACE) {
-                    // back() saves+returns to the ROM list when playing (true); from
-                    // the list it returns false (nothing left to pop here).
-                    let in_list = !emu.back(&vm, &mut fbuf);
-                    if rc == K_HOME {
-                        // backtick always jumps to the home menu
-                        screen = Screen::Menu;
-                        menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                    } else if in_list {
-                        // backspace from the ROM list -> back up to the Games launcher
+                if ev.pressed && rc == K_HOME {
+                    // ESC = back one level: playing -> ROM list (saves cart RAM); from the ROM
+                    // list -> the Games launcher. (Backspace is a game button now, below.)
+                    if !emu.back(&vm, &mut fbuf) {
                         screen = Screen::Games;
                         games.enter(&mut fbuf);
                     }
@@ -697,41 +692,21 @@ fn main() -> ! {
             }
             last_input = Instant::now();
             if screen_off {
-                // wake the screen; consume this key
+                // Any key wakes the screen (the panel kept its last frame, so just turn the
+                // backlight back on) and is consumed — it doesn't also act on the active screen.
                 let _ = backlight.set_duty(bl_pct(config.disp_bright));
                 screen_off = false;
-                charge::draw(&mut fbuf, true);
                 dirty = true;
                 continue;
             }
             dirty = true;
             let rc = (ev.row, ev.col);
 
+            // ESC (the ` top-left key) = go BACK one level. Menus aren't deeply nested, so a
+            // single back is enough — there's no separate "jump all the way home" anymore.
+            // Backspace no longer navigates: it falls through to the active screen as a normal
+            // key (text apps delete a char with it; others ignore it).
             if rc == K_HOME {
-                if screen == Screen::Notes {
-                    notes.save_if_dirty(&vm); // persist before jumping home
-                }
-                if screen == Screen::Player {
-                    player.stop_session(&vm); // release SD handles before leaving
-                }
-                if screen == Screen::Misc {
-                    misc.leave(&vm); // finalise a recording / free heap before leaving
-                }
-                screen = Screen::Menu;
-                menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                continue;
-            }
-
-            // Backspace = go back one step (the job G0 does, on a key that's easy to
-            // reach). In the Hacking / Notes text-entry fields Backspace edits text
-            // instead, so let those screens handle it.
-            if rc == K_BACKSPACE
-                && !(screen == Screen::Hacking && hacking.is_editing())
-                && !(screen == Screen::Notes && notes.is_editing())
-                && !(screen == Screen::WebUi && webui.is_editing())
-                && !(screen == Screen::Misc && misc.is_editing())
-                && screen != Screen::Repl
-            {
                 match screen {
                     Screen::Menu => {}
                     Screen::WebUi => {
@@ -765,7 +740,15 @@ fn main() -> ! {
                             menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                         }
                     }
+                    Screen::Notes => {
+                        if !notes.back(&vm, &mut fbuf) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                    }
                     _ => {
+                        // flat screens (Synth, Settings, Sysinfo, Stopwatch, Browser, Charge,
+                        // Repl): one level up = the home menu.
                         screen = Screen::Menu;
                         menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                     }
@@ -1287,91 +1270,39 @@ fn main() -> ! {
         if low && !g0_prev_low {
             last_input = Instant::now();
             if screen_off {
+                // G0 wakes the screen (the panel kept its last frame) and is consumed.
                 let _ = backlight.set_duty(bl_pct(config.disp_bright));
                 screen_off = false;
-                charge::draw(&mut fbuf, true);
                 dirty = true;
             } else {
-                match screen {
+                // G0 = screen-sleep toggle, EXCEPT on screens where it has a real per-app
+                // function: Synth (mode), Emu/Player (playback), Misc (Remote connection
+                // toggle). Anywhere else it puts the screen to sleep (any key or G0 wakes it).
+                let consumed = match screen {
                     Screen::Synth => {
                         mode = mode.next();
                         ui::flash_mode(&mut fbuf, mode, synth.volume());
-                        dirty = true;
-                    }
-                    Screen::Charge => {
-                        // G0 toggles the screen off while charging (any key wakes it)
-                        let _ = backlight.set_duty(0);
-                        screen_off = true;
-                    }
-                    Screen::Hacking => {
-                        // G0 = back one level inside Hacking; pop to the menu at the top
-                        if !hacking.back(&mut fbuf) {
-                            screen = Screen::Menu;
-                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                        }
-                        dirty = true;
-                    }
-                    Screen::Notes => {
-                        // G0 = save + back to the slot list; pop to the menu at the top
-                        if !notes.back(&vm, &mut fbuf) {
-                            screen = Screen::Menu;
-                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                        }
-                        dirty = true;
-                    }
-                    Screen::Games => {
-                        // G0 = leave the game back to the games list; pop to the menu at the top
-                        if !games.back(&mut fbuf) {
-                            screen = Screen::Menu;
-                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                        }
-                        dirty = true;
-                    }
-                    Screen::Misc => {
-                        // G0 = Life toggles its rules overlay; other items leave to the
-                        // list; in the list it pops to the home menu.
-                        if !misc.g0(&vm, &mut fbuf) {
-                            screen = Screen::Menu;
-                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                        }
-                        dirty = true;
-                    }
-                    Screen::WebUi => {
-                        // G0 = password field -> list; list/status -> home menu
-                        if !webui.back(&mut fbuf) {
-                            screen = Screen::Menu;
-                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                        }
-                        dirty = true;
+                        true
                     }
                     #[cfg(feature = "emu")]
-                    Screen::Emu => {
-                        if emu.is_playing() {
-                            // G0 while playing cycles the volume (exit via ` / Backspace).
-                            emu.bump_volume(&mut fbuf);
-                        } else if !emu.back(&vm, &mut fbuf) {
-                            // from the ROM library, back up to the Games launcher.
-                            screen = Screen::Games;
-                            games.enter(&mut fbuf);
-                        }
-                        dirty = true;
+                    Screen::Emu if emu.is_playing() => {
+                        emu.bump_volume(&mut fbuf); // cycle in-game volume
+                        true
                     }
-                    Screen::Player => {
-                        // G0 while a track is loaded toggles play/pause; from the
-                        // track list it returns to the home menu.
-                        if player.in_playing() {
-                            player.toggle_pause(&mut fbuf);
-                        } else {
-                            screen = Screen::Menu;
-                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                        }
-                        dirty = true;
+                    Screen::Player if player.in_playing() => {
+                        player.toggle_pause(&mut fbuf);
+                        true
                     }
-                    _ => {
-                        screen = Screen::Menu;
-                        menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-                        dirty = true;
-                    }
+                    // Misc returns true only when G0 had a real function (the Remote app's
+                    // USB/BLE connection toggle); otherwise it leaves it to us to sleep.
+                    Screen::Misc => misc.g0(&mut fbuf),
+                    _ => false,
+                };
+                if consumed {
+                    dirty = true;
+                } else {
+                    let _ = backlight.set_duty(0);
+                    screen_off = true;
                 }
             }
         }
