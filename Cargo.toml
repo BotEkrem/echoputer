@@ -13,6 +13,10 @@ path = "src/main.rs"
 # USB-serial radio self-test: at boot, drive every Hacking tool and print results
 # over serial (no keypresses needed), then fall through to the normal menu.
 selftest = []
+# Boot-time IR self-test: loops through protocols/codes/carrier frequencies on GPIO44,
+# logging each over serial, so we can find what a TV actually responds to (point the
+# Cardputer at the TV, flash --features irtest, watch which IRTEST # toggles it).
+irtest = []
 # Diagnostic: print every raw keyboard event (down/up + row/col) over serial, to
 # see whether the TCA8418 reports key releases. Used to design hold-to-repeat.
 keylog = []
@@ -45,6 +49,11 @@ player = []
 [dependencies]
 # Core HAL. `unstable` is required for the I2S driver (audio) and a few helpers.
 esp-hal = { version = "1.1.1", features = ["esp32s3", "unstable"] }
+# Raw PAC (same version esp-hal pulls in -> one unified instance): used ONLY to clear the
+# RTC_CNTL digital pad-hold on GPIO44 before driving the IR LED (esp-hal never unholds a
+# digital pad, so the ROM/UART-detach can leave GPIO44=U0RXD frozen → IR output never reaches
+# the pad despite a correct GPIO config).
+esp32s3 = "0.35.2"
 esp-backtrace = { version = "0.19.0", features = ["esp32s3", "panic-handler", "println"] }
 # default feature "auto" picks the USB Serial/JTAG printer on the ESP32-S3.
 esp-println = { version = "0.17.0", features = ["esp32s3"] }

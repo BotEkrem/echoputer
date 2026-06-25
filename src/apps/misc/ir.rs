@@ -5,19 +5,20 @@
 
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 
-use crate::hal::ir::{IrTx, PRESETS};
+use crate::hal::ir::{IrTx, Protocol};
 use crate::hal::keymap;
 use crate::i18n::ir;
 use crate::{i18n, theme};
 
-const CUSTOM: usize = PRESETS.len(); // row index of the "Custom" entry (last row)
-const ROWS: usize = PRESETS.len() + 1;
-const TOP: i32 = 30;
-const ROW_H: i32 = 16;
+const POWER_ROW: usize = 0; // the "blast all power codes" button (default selection)
+const CUSTOM: usize = 1; // the custom hex-code row
+const ROWS: usize = 2;
+const TOP: i32 = 34;
+const ROW_H: i32 = 18;
 
 pub struct Ir {
     tx: IrTx,
-    sel: usize,      // 0..PRESETS.len() = a preset; == CUSTOM = the custom-code row
+    sel: usize,      // POWER_ROW = blast-all button; CUSTOM = the custom-code row
     custom: u32,     // 32-bit NEC code being entered (hex) on the Custom row
     last_sent: bool, // flash a "sent" confirmation after a transmit
 }
@@ -26,7 +27,7 @@ impl Ir {
     pub fn new(tx: IrTx) -> Self {
         Ir {
             tx,
-            sel: 0,
+            sel: POWER_ROW, // open on the blast-all button so ENTER just works
             custom: 0,
             last_sent: false,
         }
@@ -40,6 +41,13 @@ impl Ir {
     /// The IR channel lives inside `IrTx`, owned by this app for its lifetime — there
     /// is no transient heap to release.
     pub fn exit(&mut self) {}
+
+    /// True only while the Custom-code row is selected — main then routes Backspace to
+    /// `on_key` (delete a hex nibble) instead of "go back". On a preset row Backspace
+    /// should leave the app, so this is false there.
+    pub fn is_editing(&self) -> bool {
+        self.sel == CUSTOM
+    }
 
     pub fn on_key(&mut self, rc: (u8, u8), d: &mut impl DrawTarget<Color = Rgb565>) {
         match rc {
@@ -58,10 +66,20 @@ impl Ir {
                 }
             }
             crate::K_ENTER => {
-                let code = if self.sel == CUSTOM { self.custom } else { PRESETS[self.sel].1 };
-                self.tx.send_nec(code);
-                self.last_sent = true;
-                self.draw_all(d);
+                if self.sel == CUSTOM {
+                    self.tx.tap(Protocol::Nec, self.custom); // custom hex code is sent as NEC
+                    self.last_sent = true;
+                    self.draw_all(d);
+                } else {
+                    // POWER_ROW: blast every brand/protocol power code (~1.5 s). Flash a note
+                    // first since the blast blocks the UI while it runs.
+                    theme::clear(d);
+                    theme::topbar(d, "IR");
+                    theme::text_center(d, i18n::t(ir::SENDING), theme::W / 2, 60, theme::BODY_FONT, theme::accent());
+                    self.tx.blast_power();
+                    self.last_sent = true;
+                    self.draw_all(d);
+                }
             }
             _ => {
                 // On the Custom row, edit the hex code: digits 0-9/a-f shift in a nibble,
@@ -102,7 +120,7 @@ impl Ir {
                 theme::text(d, i18n::t(ir::CUSTOM), theme::PAD + 16, y, theme::TITLE_FONT, col);
                 theme::text(d, hs, theme::PAD + 86, y + 1, theme::BODY_FONT, if selected { theme::FG } else { theme::FAINT });
             } else {
-                theme::text(d, PRESETS[i].0, theme::PAD + 16, y, theme::TITLE_FONT, col);
+                theme::text(d, i18n::t(ir::POWER_ALL), theme::PAD + 16, y, theme::TITLE_FONT, col);
             }
         }
         // Confirmation + aim hint.

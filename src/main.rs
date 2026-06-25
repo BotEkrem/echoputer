@@ -332,13 +332,95 @@ fn main() -> ! {
         Err((_, c)) => c,
     };
 
-    // ---------------- IR transmitter (GPIO44, RMT channel 1, 38 kHz carrier) ----------------
-    let ir_chan = rmt
-        .channel1
-        .configure_tx(&ir::tx_config())
-        .unwrap()
-        .with_pin(peripherals.GPIO44);
-    let ir_tx = ir::IrTx::new(ir_chan);
+    // ---------------- IR transmitter (GPIO44) ----------------
+    // CRITICAL: GPIO44 is the ROM UART0-RX (U0RXD) console pin. The boot/UART-detach path can
+    // leave its RTC digital PAD-HOLD latched, which FREEZES the pad at its boot drive — so every
+    // later GPIO/LEDC/RMT output write looks correct in the registers (RMT even returns TX-OK) but
+    // NOTHING reaches the pin (camera-confirmed zero IR emission; the sibling GPIO43=U0TXD works
+    // because it isn't held). esp-hal never clears a digital pad-hold, so we do it ourselves here,
+    // before configuring GPIO44 — release all digital pad-holds + force-unhold.
+    // SAFETY: RTC_CNTL is otherwise idle at this point and we rely on no pin being held.
+    unsafe {
+        let rtc = &*esp32s3::RTC_CNTL::PTR;
+        rtc.dig_pad_hold().write(|w| w.dig_pad_hold().bits(0));
+        rtc.dig_iso().modify(|_, w| w.dg_pad_force_unhold().set_bit());
+    }
+    #[cfg(not(feature = "irtest"))]
+    let ir_tx = ir::IrTx::new(
+        rmt.channel1
+            .configure_tx(&ir::tx_config())
+            .unwrap()
+            .with_pin(peripherals.GPIO44),
+    );
+
+    // Boot-time IR self-test (`--features irtest`): drive GPIO44 with the LEDC peripheral — a
+    // HARDWARE carrier (like the proven Ultimate-Remote firmware) — and software-gate the mark/
+    // space envelope. SWEEPS carrier frequency x protocol/code forever, logging each over serial
+    // AND showing "freq / code" on screen. Point the Cardputer at a TV; when it toggles, read the
+    // on-screen freq+code (or the latest IRTEST log). Diverges — the `!` coerces to IrTx so the
+    // (now unreachable) app below still type-checks; GPIO44 is consumed only here.
+    #[cfg(feature = "irtest")]
+    let ir_tx: ir::IrTx = {
+        use esp_hal::gpio::Pin as _; // for .degrade()
+        use ir::Protocol::{Nec, Rc5, Rc6, Sony};
+        let freqs: [(u32, &str); 4] = [(36_000, "36k"), (38_000, "38k"), (40_000, "40k"), (33_000, "33k")];
+        let codes: &[(ir::Protocol, u32, &str)] = &[
+            (Rc5, 0x0C, "RC5.0C"),
+            (Rc5, 0x20, "RC5.20"),
+            (Rc6, 0x0C, "RC6.0C"),
+            (Nec, 0xE0E0_40BF, "NEC.SAM"),
+            (Nec, 0x20DF_10EF, "NEC.LG"),
+            (Sony, 0x0115, "SONY"),
+        ];
+        let mut ir_timer = ledc.timer::<LowSpeed>(timer::Number::Timer1);
+        let mut gpio44 = peripherals.GPIO44.degrade();
+        esp_println::println!("=== IR SELFTEST LEDC sweep: {} freqs x {} codes ===", freqs.len(), codes.len());
+        let mut n = 0usize;
+        loop {
+            for &(freq, flabel) in freqs.iter() {
+                ir_timer
+                    .configure(timer::config::Config {
+                        duty: timer::config::Duty::Duty8Bit,
+                        clock_source: timer::LSClockSource::APBClk,
+                        frequency: Rate::from_hz(freq),
+                    })
+                    .unwrap();
+                let mut ir_ch = ledc.channel(channel::Number::Channel1, gpio44.reborrow());
+                ir_ch
+                    .configure(channel::config::Config {
+                        timer: &ir_timer,
+                        duty_pct: 0,
+                        drive_mode: DriveMode::PushPull,
+                    })
+                    .unwrap();
+                for &(proto, code, clabel) in codes.iter() {
+                    esp_println::println!("IRTEST #{} {}Hz {} code={:#010X}", n, freq, clabel, code);
+                    theme::clear(&mut display);
+                    theme::topbar(&mut display, "IR SELFTEST - watch TV");
+                    theme::text_center(&mut display, flabel, theme::W / 2, 34, theme::TITLE_FONT, theme::accent());
+                    theme::text_center(&mut display, clabel, theme::W / 2, 78, theme::TITLE_FONT, theme::FG);
+                    let mut buf = [(0u16, 0u16); ir::MAX_PAIRS];
+                    let cnt = ir::frame_pairs(proto, code, n & 1 == 0, &mut buf);
+                    for _ in 0..3 {
+                        for &(mark, space) in &buf[..cnt] {
+                            if mark > 0 {
+                                let _ = ir_ch.set_duty(30);
+                                delay.delay_micros(mark as u32);
+                            }
+                            let _ = ir_ch.set_duty(0);
+                            if space > 0 {
+                                delay.delay_micros(space as u32);
+                            }
+                        }
+                        let _ = ir_ch.set_duty(0);
+                        delay.delay_millis(40);
+                    }
+                    delay.delay_millis(1500);
+                    n += 1;
+                }
+            }
+        }
+    };
 
     // ---------------- Boot intro (skippable in Settings) ----------------
     if config.intro_on {

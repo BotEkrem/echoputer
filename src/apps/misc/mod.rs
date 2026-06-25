@@ -137,9 +137,12 @@ impl Misc {
     /// True when an active input item (Calc/Convert/Dice/QR) needs Backspace to
     /// DELETE a character rather than exit — main exempts it from the global back.
     pub fn is_editing(&self) -> bool {
-        // Calc/Convert/Dice/QR delete on Backspace; the Remote USB keyboard sends
-        // Backspace to the HOST — both need it routed to on_key, not "go back".
-        matches!(self.active, Some(1 | 2 | 3 | 4)) || self.remote_typing()
+        // Calc/Convert/Dice/QR delete on Backspace; IR deletes a hex nibble only on its
+        // Custom row; the Remote USB keyboard sends Backspace to the HOST — all need it
+        // routed to on_key, not "go back".
+        matches!(self.active, Some(1 | 2 | 3 | 4))
+            || (self.active == Some(5) && self.ir.is_editing())
+            || self.remote_typing()
     }
 
     /// "Aa" caps/shift toggle for the active item (only QR consumes it today).

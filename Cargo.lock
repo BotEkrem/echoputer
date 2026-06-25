@@ -291,6 +291,7 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "esp32s3",
  "libm",
  "mipidsi",
  "smoltcp",
