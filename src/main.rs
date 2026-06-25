@@ -382,9 +382,6 @@ fn main() -> ! {
     .with_scl(peripherals.GPIO9);
 
     let audio_ok = es8311::init(&mut i2c).is_ok();
-    // Mic recorder (off the emugbc build): power up the ES8311 ADC too.
-    #[cfg(not(feature = "emugbc"))]
-    let _ = es8311::enable_adc(&mut i2c);
     let kbd_ok = tca8418::init(&mut i2c).is_ok();
     // BMI270 IMU (Misc Level + Step counter): probe + upload its 8 KB config blob.
     let _ = bmi270::init(&mut i2c);
@@ -410,9 +407,7 @@ fn main() -> ! {
     #[cfg(feature = "emugbc")]
     let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers_chunk_size!(0, 8184, 4092);
     #[cfg(not(feature = "emugbc"))]
-    // dma_CIRCULAR_buffers!: read_dma_circular needs >=3 descriptors for a small RX ring
-    // (the plain dma_buffers! gives a 2 KB buffer only 1 descriptor -> OutOfDescriptors).
-    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(2048, 32000);
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 32000);
     let i2s = I2s::new(
         peripherals.I2S0,
         peripherals.DMA_CH0,
@@ -428,10 +423,6 @@ fn main() -> ! {
         .with_ws(peripherals.GPIO43)
         .with_dout(peripherals.GPIO42)
         .build(tx_descriptors);
-    // Mic recorder (off emugbc): build the I2S RX side — full-duplex on I2S0, sharing
-    // its BCLK/WS, capturing the ES8311 ADC (mic) on DIN = GPIO46.
-    #[cfg(not(feature = "emugbc"))]
-    let mut i2s_rx = i2s.i2s_rx.with_din(peripherals.GPIO46).build(rx_descriptors);
     // The circular DMA transfer is held in an Option so it can be DROPPED + RECREATED
     // to resync a WEDGED ring: if the main loop ever stalls longer than the DMA buffer
     // (e.g. the emulator's launch reads the ROM/save off SD for >128 ms), the ring
@@ -452,16 +443,6 @@ fn main() -> ! {
     let tx_buf_ptr: *mut _ = tx_buffer;
     let mut transfer = Some(unsafe { (*i2s_tx_ptr).write_dma_circular(&mut *tx_buf_ptr) }.unwrap());
     let mut audio_recover_at = Instant::now();
-
-    // Mic RX: a circular read transfer, always capturing (same raw-pointer borrow
-    // decoupling as the TX above). main pops fresh PCM into the recorder only while it
-    // is recording; otherwise the ring just wraps and the data is ignored.
-    #[cfg(not(feature = "emugbc"))]
-    let i2s_rx_ptr: *mut _ = &mut i2s_rx;
-    #[cfg(not(feature = "emugbc"))]
-    let rx_buf_ptr: *mut _ = rx_buffer;
-    #[cfg(not(feature = "emugbc"))]
-    let mut rx_transfer = Some(unsafe { (*i2s_rx_ptr).read_dma_circular(&mut *rx_buf_ptr) }.unwrap());
 
     // (WS2812 LED is initialised + cleared before the splash, above, so its
     // power-on pixel doesn't glow white through boot when the LED is meant to be
@@ -1330,21 +1311,6 @@ fn main() -> ! {
         if screen == Screen::Player {
             player.pump(&vm);
         }
-        // Stream mic audio to the recorder while it is recording (off the emugbc build).
-        #[cfg(not(feature = "emugbc"))]
-        if misc.mic_armed() {
-            if let Some(rx) = rx_transfer.as_mut() {
-                let avail = rx.available().unwrap_or(0);
-                if avail > 0 {
-                    let mut buf = [0u8; 512];
-                    let n = avail.min(buf.len());
-                    if rx.pop(&mut buf[..n]).is_ok() {
-                        misc.mic_feed(&vm, &buf[..n]);
-                    }
-                }
-            }
-        }
-
         // ---- audio: keep the DMA buffer topped up (robust against slow frames) ----
         let mut audio_stuck = false;
         if let Some(tx) = transfer.as_mut() {

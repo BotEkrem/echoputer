@@ -30,8 +30,6 @@ pub mod notes;
 pub mod player;
 pub mod pong;
 pub mod qr;
-#[cfg(not(feature = "emugbc"))]
-pub mod recorder;
 pub mod remote;
 pub mod settings;
 pub mod snake;

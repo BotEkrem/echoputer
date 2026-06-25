@@ -3,9 +3,6 @@
 //! list (a second press pops to the home menu). Items that touch the SD card take the
 //! volume manager through `on_key` / the leave paths; the IMU apps (Level, Steps) take
 //! the shared I2C through `tick`.
-//!
-//! The Mic recorder is only present off the emugbc (colour) build — its I2S RX DMA
-//! buffer would shrink the tight CPU0 stack enough to overflow the Web UI there.
 
 use embedded_graphics::primitives::{PrimitiveStyle, Triangle};
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
@@ -20,8 +17,6 @@ pub mod ir;
 pub mod level;
 pub mod qr;
 pub mod qr_encode;
-#[cfg(not(feature = "emugbc"))]
-pub mod recorder;
 pub mod remote;
 pub mod stepcount;
 
@@ -32,8 +27,6 @@ use crate::apps::misc::dice::Dice;
 use crate::apps::misc::ir::Ir;
 use crate::apps::misc::level::Level;
 use crate::apps::misc::qr::Qr;
-#[cfg(not(feature = "emugbc"))]
-use crate::apps::misc::recorder::Recorder;
 use crate::apps::misc::remote::Remote;
 use crate::apps::misc::stepcount::StepCount;
 use crate::hal::ir::IrTx;
@@ -41,15 +34,11 @@ use crate::hal::usb_hid::UsbParts;
 use crate::i18n::misc;
 use crate::{i18n, theme};
 
-// Indices are stable across builds (Level=6, Steps=7); Mic (8) is build-gated.
-// Remote is always LAST, so its index shifts with Mic's presence — dispatch keys
-// off the REMOTE const below, never a literal.
-#[cfg(not(feature = "emugbc"))]
-const ITEMS: [&str; 10] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Mic", "Keyboard/Mouse"];
-#[cfg(feature = "emugbc")]
+// Item indices are stable (Chip-8=0 .. Steps=7, Keyboard/Mouse=8). The dispatch keys
+// off the REMOTE const below for the last item, never a literal.
 const ITEMS: [&str; 9] = ["Chip-8", "Calc", "Convert", "Dice", "QR", "IR", "Level", "Steps", "Keyboard/Mouse"];
 
-/// Index of the Remote item (always last; 9 with Mic, 8 on emugbc without it).
+/// Index of the Remote item (always last).
 const REMOTE: usize = ITEMS.len() - 1;
 
 const TOP: i32 = 28;
@@ -68,8 +57,6 @@ pub struct Misc {
     ir: Ir,
     level: Level,
     stepcount: StepCount,
-    #[cfg(not(feature = "emugbc"))]
-    recorder: Recorder,
     remote: Remote,
 }
 
@@ -87,8 +74,6 @@ impl Misc {
             ir: Ir::new(ir_tx),
             level: Level::new(),
             stepcount: StepCount::new(),
-            #[cfg(not(feature = "emugbc"))]
-            recorder: Recorder::new(),
             remote: Remote::new(usb),
         }
     }
@@ -108,10 +93,10 @@ impl Misc {
         }
     }
 
-    /// Free / finalise whatever item is running. The recorder needs the SD volume to
-    /// flush + close its WAV, so the leave paths thread it through here.
+    /// Free / finalise whatever item is running. Takes the SD volume so item leave paths
+    /// that need it can flush/close (none do today; kept for a uniform signature).
     fn exit_active<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>) {
-        let _ = sd; // used by the recorder arm only (absent on emugbc)
+        let _ = sd;
         match self.active {
             Some(0) => self.chip8.exit(),
             Some(1) => self.calc.exit(),
@@ -121,8 +106,6 @@ impl Misc {
             Some(5) => self.ir.exit(),
             Some(6) => self.level.exit(),
             Some(7) => self.stepcount.exit(),
-            #[cfg(not(feature = "emugbc"))]
-            Some(8) => self.recorder.finalize(sd),
             Some(REMOTE) => self.remote.exit(),
             _ => {}
         }
@@ -178,19 +161,6 @@ impl Misc {
         self.active = None;
     }
 
-    /// True when the Mic recorder is the active item and is recording — main then pops
-    /// fresh I2S RX audio and hands it to [`Misc::mic_feed`].
-    #[cfg(not(feature = "emugbc"))]
-    pub fn mic_armed(&self) -> bool {
-        self.active == Some(8) && self.recorder.is_recording()
-    }
-
-    /// Stream a chunk of captured PCM to the recorder (called by main while recording).
-    #[cfg(not(feature = "emugbc"))]
-    pub fn mic_feed<D: BlockDevice, T: TimeSource>(&mut self, sd: &VolumeManager<D, T>, bytes: &[u8]) {
-        self.recorder.feed(sd, bytes);
-    }
-
     #[inline(never)]
     pub fn on_key<D: BlockDevice, T: TimeSource>(
         &mut self,
@@ -228,8 +198,6 @@ impl Misc {
             Some(5) => self.ir.on_key(rc, d),
             Some(6) => self.level.on_key(rc, d),
             Some(7) => self.stepcount.on_key(rc, d),
-            #[cfg(not(feature = "emugbc"))]
-            Some(8) => self.recorder.on_key(rc, sd, d),
             Some(REMOTE) => self.remote.on_key(rc, d),
             _ => {}
         }
@@ -248,8 +216,6 @@ impl Misc {
             Some(5) => self.ir.tick(d),
             Some(6) => self.level.tick(i2c, d),
             Some(7) => self.stepcount.tick(i2c, d),
-            #[cfg(not(feature = "emugbc"))]
-            Some(8) => self.recorder.tick(d),
             Some(REMOTE) => self.remote.tick(d),
             _ => false,
         }
@@ -270,8 +236,6 @@ impl Misc {
             5 => self.ir.enter(d),
             6 => self.level.enter(d),
             7 => self.stepcount.enter(d),
-            #[cfg(not(feature = "emugbc"))]
-            8 => self.recorder.enter(d),
             REMOTE => self.remote.enter(d),
             _ => {}
         }

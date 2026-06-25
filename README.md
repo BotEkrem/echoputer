@@ -81,11 +81,9 @@ Hacking is the security toolkit and has its own section below. The rest:
   (a few well-known TV-power presets plus a custom 32-bit code entered in hex; aim
   the top edge at the device); **Level**, a bubble level off the BMI270 IMU (lay it
   flat and the ball centres, tilt it and the ball rolls, with the tilt angle shown);
-  **Steps**, a step counter off the same accelerometer (ENTER resets); and, on every
-  build except `emugbc`, **Mic**, a
-  recorder that captures the onboard microphone to a WAV at `/ECHO/REC0.WAV` (the
-  colour build leaves it out — its RAM is too tight to add the capture buffer next
-  to the radio). `` ` ``/Backspace steps back to the list, then to the home menu.
+  **Steps**, a step counter off the same accelerometer (ENTER resets); and
+  **Keyboard/Mouse**, which turns the Cardputer into a USB HID keyboard + mouse.
+  `` ` ``/Backspace steps back to the list, then to the home menu.
 - Charge is a full-screen battery gauge for leaving the device on the charger;
   the ADV only charges while it is powered on.
 - Settings holds the preferences, grouped into General, Synthwave and File
@@ -201,7 +199,7 @@ reserves the RAM the boot stack needs.
 | *(default)* | base firmware: WAV-only Player, no Game Boy. Pure Rust, no C. |
 | `player` | MP3 decode in the Player (vendors minimp3). |
 | `emu` | Game Boy emulator, monochrome (Peanut-GB). Clean in-game audio. |
-| `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. The colour core's RAM use also drops the Misc **Mic** recorder from this build (its capture buffer won't fit beside the radio). |
+| `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. |
 | `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
 | `selftest` | boot-time serial self-test of every radio tool. |
 | `audiodiag` | logs I2S audio health (throughput, underruns) over serial once a second, for debugging the audio path. |
@@ -244,8 +242,8 @@ src/
     menu, splash, repl, games (snake, g2048, tetris, pong), stopwatch, notes,
     sysinfo, synth, scales, ui, browser, webui, charge, settings, hacking, wiki
     misc          the Misc sub-launcher + its apps: chip8, calc, convert, dice,
-                  qr (+ qr_encode), ir (NEC remote), level + stepcount (BMI270 IMU);
-                  recorder (mic -> WAV) off emugbc
+                  qr (+ qr_encode), ir (NEC remote), level + stepcount (BMI270 IMU),
+                  remote (USB HID keyboard + mouse)
     emu/          the Game Boy emulator (mod, ffi, rom, input, video), behind
                   --features emu; the vendored C cores live in vendor/
     player/       the audio player (mod, wav, resample; mp3 behind --features
@@ -259,7 +257,7 @@ src/
 | Display, ST7789V2 240x135 | SPI2, SCK 36, MOSI 35, CS 37, DC 34, RST 33, backlight 38 |
 | Keyboard, TCA8418 @ 0x34 | I2C, SDA 8, SCL 9 |
 | IMU, BMI270 @ 0x68 | I2C, SDA 8, SCL 9 (6-axis accel+gyro; no magnetometer, so no compass) |
-| Audio, ES8311 @ 0x18 + NS4150B | I2S0, BCLK 41, WS 43, DOUT 42; DIN 46 (mic ADC, off emugbc) |
+| Audio, ES8311 @ 0x18 + NS4150B | I2S0, BCLK 41, WS 43, DOUT 42 (playback only; the codec's mic ADC on DIN 46 is wired but unused — I2S RX capture is unresolved on esp-hal, a possible future feature) |
 | SD card | SPI3, SCK 40, MOSI 14, MISO 39, CS 12, FAT32 |
 | RGB LED, WS2812 | GPIO21 (RMT ch0) |
 | IR transmitter | GPIO44 (RMT ch1), 38 kHz NEC, transmit-only |
