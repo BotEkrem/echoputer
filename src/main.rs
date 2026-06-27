@@ -1252,7 +1252,11 @@ fn main() -> ! {
                                 hacking::draw_running(&mut fbuf, title, "EAPOL", 0);
                                 blit!();
                                 let mut last = Instant::now();
-                                let res = radio.run_evil_twin(ssid, ch, "00000000", |n: u32| {
+                                // optional SD wordlist (/wifi_pass.txt) on top of the built-in list
+                                let mut wl = alloc::vec![0u8; 8192];
+                                let wln = radio::webui::read_root_file(&vm, "wifi_pass.txt", &mut wl);
+                                let extra = if wln > 0 { Some(&wl[..wln]) } else { None };
+                                let res = radio.run_evil_twin(ssid, ch, "00000000", extra, |n: u32| {
                                     let mut stop = false;
                                     while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
                                         if ev.pressed {
@@ -1274,7 +1278,7 @@ fn main() -> ! {
                                 });
                                 g0_prev_low = g0.is_low();
                                 match res {
-                                    Some(o) => hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked),
+                                    Some(o) => hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked.as_deref()),
                                     None => hacking.show_attack_failed(&mut fbuf, "radio busy"),
                                 }
                             }
@@ -1291,7 +1295,11 @@ fn main() -> ! {
                                 hacking::draw_running(&mut fbuf, title, "EAPOL", 0);
                                 blit!();
                                 let mut last = Instant::now();
-                                let res = radio.handshake_crack(ssid, bssid, ch, |n: u32| {
+                                // optional SD wordlist (/wifi_pass.txt) on top of the built-in list
+                                let mut wl = alloc::vec![0u8; 8192];
+                                let wln = radio::webui::read_root_file(&vm, "wifi_pass.txt", &mut wl);
+                                let extra = if wln > 0 { Some(&wl[..wln]) } else { None };
+                                let res = radio.handshake_crack(ssid, bssid, ch, extra, |n: u32| {
                                     let mut stop = false;
                                     while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
                                         if ev.pressed {
@@ -1313,7 +1321,7 @@ fn main() -> ! {
                                 });
                                 g0_prev_low = g0.is_low();
                                 match res {
-                                    Some(o) => hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked),
+                                    Some(o) => hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked.as_deref()),
                                     None => hacking.show_attack_failed(&mut fbuf, "radio busy"),
                                 }
                             }

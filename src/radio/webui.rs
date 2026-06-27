@@ -80,6 +80,25 @@ fn index_load<D: BlockDevice, T: TimeSource>(vm: &VolumeManager<D, T>, buf: &mut
     n
 }
 
+/// Read a root-level SD file into `buf`, returning the byte count (0 = absent/empty).
+/// Used to load an optional WPA wordlist (`/wifi_pass.txt`) for the offline cracker.
+pub fn read_root_file<D: BlockDevice, T: TimeSource>(vm: &VolumeManager<D, T>, name: &str, buf: &mut [u8]) -> usize {
+    let mut n = 0usize;
+    let _ = (|| -> Option<()> {
+        let vol = vm.open_volume(VolumeIdx(0)).ok()?;
+        let dir = vol.open_root_dir().ok()?;
+        let f = dir.open_file_in_dir(name, Mode::ReadOnly).ok()?;
+        while n < buf.len() {
+            match f.read(&mut buf[n..]).ok()? {
+                0 => break,
+                k => n += k,
+            }
+        }
+        Some(())
+    })();
+    n
+}
+
 /// Find the long name mapped to an 8.3 `short` within a loaded index buffer.
 fn index_lookup<'a>(idx: &'a [u8], short: &[u8]) -> Option<&'a [u8]> {
     let mut i = 0;
