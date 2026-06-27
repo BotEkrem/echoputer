@@ -1516,6 +1516,12 @@ impl Hacking {
             theme::text_center(d, i18n::t(hacking::SCAN_DONE), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
             let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::CAMERAS_FOUND));
             theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
+        } else if matches!(self.pending, Tool::Deauth) {
+            // raw deauth TX is rejected by this ESP IDF blob -> attack_sent stays 0; be honest.
+            theme::text_center(d, i18n::t(hacking::DEAUTH_NA), theme::W / 2, 38, theme::TITLE_FONT, theme::DESTRUCTIVE);
+            theme::text_center(d, i18n::t(hacking::USE_HANDSHAKE), theme::W / 2, 60, theme::BODY_FONT, theme::MUTED);
+            let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::FRAMES));
+            theme::text_center(d, &line, theme::W / 2, 80, theme::BODY_FONT, theme::FAINT);
         } else {
             theme::text_center(d, i18n::t(hacking::STOPPED), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
             let unit = if matches!(self.pending, Tool::BleSpam) {

