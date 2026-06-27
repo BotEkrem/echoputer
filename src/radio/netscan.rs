@@ -28,13 +28,43 @@ pub struct NetResult {
     pub scanned: usize, // ports probed so far
     pub open: [bool; 12],
     pub phase: &'static str,
+    /// Server banner grabbed from the first open HTTP port (camera/DVR hint).
+    pub banner: [u8; 48],
+    pub banner_len: usize,
+    /// Cracked WiFi password (if the joined AP was encrypted), else empty.
+    pub wifi_pass: [u8; 24],
+    pub wifi_pass_len: usize,
 }
 impl NetResult {
-    fn new() -> Self {
-        Self { got_ip: false, ip: [0; 4], gw: [0; 4], scanned: 0, open: [false; 12], phase: "join" }
+    pub fn new() -> Self {
+        Self {
+            got_ip: false,
+            ip: [0; 4],
+            gw: [0; 4],
+            scanned: 0,
+            open: [false; 12],
+            phase: "join",
+            banner: [0; 48],
+            banner_len: 0,
+            wifi_pass: [0; 24],
+            wifi_pass_len: 0,
+        }
+    }
+    pub fn set_wifi_pass(&mut self, p: &str) {
+        let b = p.as_bytes();
+        let n = b.len().min(self.wifi_pass.len());
+        self.wifi_pass[..n].copy_from_slice(&b[..n]);
+        self.wifi_pass_len = n;
+    }
+    pub fn wifi_pass_str(&self) -> &str {
+        core::str::from_utf8(&self.wifi_pass[..self.wifi_pass_len]).unwrap_or("")
     }
     pub fn open_count(&self) -> usize {
         self.open.iter().filter(|&&o| o).count()
+    }
+    /// The grabbed HTTP banner, if any.
+    pub fn banner_str(&self) -> &str {
+        core::str::from_utf8(&self.banner[..self.banner_len]).unwrap_or("")
     }
 }
 
@@ -133,6 +163,28 @@ pub fn scan(iface_sta: WifiIface<'static>, mac: [u8; 6], mut tick: impl FnMut(&N
         res.scanned = i + 1;
         if res.open[i] {
             println!("[NETSCAN] {}.{}.{}.{}:{} OPEN", res.gw[0], res.gw[1], res.gw[2], res.gw[3], port);
+            // Grab the HTTP Server banner from the first open web port — the
+            // seed for camera/DVR fingerprinting. Plaintext only (skip TLS).
+            if res.banner_len == 0 && (port == 80 || port == 8080) {
+                let r = crate::radio::http::http_head(
+                    &mut iface,
+                    &mut device,
+                    &mut sockets,
+                    tcp_h,
+                    gw,
+                    port,
+                    "/",
+                    None,
+                    50000 + i as u16,
+                    &now,
+                );
+                if r.connected {
+                    res.banner_len = r.write_banner(port, &mut res.banner);
+                    if res.banner_len > 0 {
+                        println!("[NETSCAN] banner: {}", res.banner_str());
+                    }
+                }
+            }
         }
         if !tick(&res) {
             break;

@@ -12,7 +12,7 @@ use embedded_graphics::{
     },
     pixelcolor::Rgb565,
     prelude::*,
-    primitives::{Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
+    primitives::{Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 
@@ -65,6 +65,36 @@ pub fn fill(d: &mut impl DrawTarget<Color = Rgb565>, x: i32, y: i32, w: u32, h: 
 pub fn hline(d: &mut impl DrawTarget<Color = Rgb565>, y: i32, c: Rgb565) {
     let _ = Line::new(Point::new(0, y), Point::new(W - 1, y))
         .into_styled(PrimitiveStyle::with_stroke(c, 1))
+        .draw(d);
+}
+
+/// Arbitrary line from (x0,y0) to (x1,y1). Used by the radar views.
+pub fn line(d: &mut impl DrawTarget<Color = Rgb565>, x0: i32, y0: i32, x1: i32, y1: i32, c: Rgb565) {
+    let _ = Line::new(Point::new(x0, y0), Point::new(x1, y1))
+        .into_styled(PrimitiveStyle::with_stroke(c, 1))
+        .draw(d);
+}
+
+/// Stroked circle of radius `r` centred at (cx,cy).
+pub fn ring(d: &mut impl DrawTarget<Color = Rgb565>, cx: i32, cy: i32, r: i32, c: Rgb565) {
+    if r < 1 {
+        return;
+    }
+    let _ = Circle::new(Point::new(cx - r, cy - r), (r * 2) as u32)
+        .into_styled(PrimitiveStyle::with_stroke(c, 1))
+        .draw(d);
+}
+
+/// Filled circle (dot) of radius `r` centred at (cx,cy).
+pub fn disc(d: &mut impl DrawTarget<Color = Rgb565>, cx: i32, cy: i32, r: i32, c: Rgb565) {
+    if r < 1 {
+        let _ = Rectangle::new(Point::new(cx, cy), Size::new(1, 1))
+            .into_styled(PrimitiveStyle::with_fill(c))
+            .draw(d);
+        return;
+    }
+    let _ = Circle::new(Point::new(cx - r, cy - r), (r * 2) as u32)
+        .into_styled(PrimitiveStyle::with_fill(c))
         .draw(d);
 }
 

@@ -548,6 +548,8 @@ fn main() -> ! {
     #[cfg(feature = "audiodiag")]
     let mut diag_last = Instant::now();
     let mut last_anim = Instant::now();
+    let mut last_full_scan = Instant::now(); // radar: full rescan cadence
+    let mut last_fast_scan = Instant::now(); // radar: locked-target single-channel
     let mut last_vu_fw: i32 = -1; // last drawn VU meter fill width (px); gates Synth redraws
     // Hold-to-repeat (PC-style): SET on press, CLEAR on release (now that the
     // press/release decode is correct), synthesize repeats in between. A 4 s cap
@@ -590,6 +592,15 @@ fn main() -> ! {
     // through to the normal menu. No-op in a normal build.
     #[cfg(feature = "selftest")]
     selftest::run(&mut radio);
+
+    // Network-stack self-test build: HTTP-client core (parser + builder + a
+    // smoltcp loopback round-trip) + the camera classifier, no radio needed.
+    // No-op in a normal build.
+    #[cfg(feature = "networktest")]
+    {
+        crate::radio::http::networktest();
+        crate::radio::camscan::networktest();
+    }
 
     loop {
         // ---- keyboard (with hold-to-repeat) ----
@@ -781,23 +792,70 @@ fn main() -> ! {
                             wifi_connect_only = false; // connect, then serve the dashboard
                             screen = Screen::WebUi;
                             synth.silence();
-                            webui.enter(&mut fbuf); // "scanning WiFi..."
-                            let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
-                            webui.begin_scan();
-                            match radio.scan() {
-                                Some(aps) => {
-                                    for ap in &aps {
-                                        let secured = ap.auth != "open";
-                                        webui.push_ap(ap.ssid.as_bytes(), ap.rssi, ap.channel, ap.auth, secured);
+                            if radio::wifi_connected() {
+                                // Already connected (via the Internet/Connect item): serve the
+                                // dashboard on the EXISTING link — don't make the user re-pick.
+                                let mac = esp_hal::efuse::base_mac_address();
+                                let mb = mac.as_bytes();
+                                let sys = radio::webui::SysSnapshot {
+                                    heap_free: esp_alloc::HEAP.free(),
+                                    heap_used: esp_alloc::HEAP.used(),
+                                    heap_total: esp_alloc::HEAP.stats().size,
+                                    uptime_s: sysinfo.uptime_s(),
+                                    batt_pct: if battery::present() { battery::level() as i32 } else { -1 },
+                                    mac: [mb[0], mb[1], mb[2], mb[3], mb[4], mb[5]],
+                                };
+                                webui.draw_status(&mut fbuf, webui::Phase::Connecting);
+                                let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                let mut last = Instant::now();
+                                let _ = radio.serve_webui(&vm, &sys, |st| {
+                                    let mut stop = false;
+                                    while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                        if ev.pressed {
+                                            stop = true;
+                                        }
                                     }
+                                    if g0.is_low() {
+                                        stop = true;
+                                    }
+                                    if stop {
+                                        return false;
+                                    }
+                                    if last.elapsed() >= Duration::from_millis(180) {
+                                        last = Instant::now();
+                                        let phase = match st.phase {
+                                            radio::webui::Phase::Serving => {
+                                                webui::Phase::Serving { ip: st.ip, hits: st.hits }
+                                            }
+                                            _ => webui::Phase::Connecting,
+                                        };
+                                        webui.draw_status(&mut fbuf, phase);
+                                        let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                    }
+                                    true
+                                });
+                                g0_prev_low = g0.is_low();
+                                screen = Screen::Menu;
+                                menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                            } else {
+                                webui.enter(&mut fbuf); // "scanning WiFi..."
+                                let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                webui.begin_scan();
+                                match radio.scan() {
+                                    Some(aps) => {
+                                        for ap in &aps {
+                                            let secured = ap.auth != "open";
+                                            webui.push_ap(ap.ssid.as_bytes(), ap.rssi, ap.channel, ap.auth, secured);
+                                        }
+                                    }
+                                    None => webui.mark_scan_failed(),
                                 }
-                                None => webui.mark_scan_failed(),
+                                webui.show_list(&mut fbuf);
+                                // load remembered networks so a known one's password
+                                // comes pre-filled when picked.
+                                webui.clear_known();
+                                radio::webui::load_creds(&vm, |ssid, pw| webui.add_known(ssid, pw));
                             }
-                            webui.show_list(&mut fbuf);
-                            // load remembered networks so a known one's password
-                            // comes pre-filled when picked.
-                            webui.clear_known();
-                            radio::webui::load_creds(&vm, |ssid, pw| webui.add_known(ssid, pw));
                         }
                         menu::AppKind::Player => {
                             // Free the radio's heap — the Player allocates its decode
@@ -1158,6 +1216,7 @@ fn main() -> ! {
                             | hacking::Tool::EvilTwin
                             | hacking::Tool::Handshake
                             | hacking::Tool::NetScan
+                            | hacking::Tool::CamScan
                             | hacking::Tool::EvilPortal
                             | hacking::Tool::BleSpam => {}
                         },
@@ -1227,12 +1286,14 @@ fn main() -> ! {
                         hacking::Action::NetScan => {
                             if let Some((ssid_buf, ssid_len, _ch)) = hacking.target_ssid_owned() {
                                 let ssid = core::str::from_utf8(&ssid_buf[..ssid_len]).unwrap_or("");
+                                let wk = hacking.wifi_known();
+                                let known = wk.as_ref().map(|(b, l)| core::str::from_utf8(&b[..*l]).unwrap_or(""));
                                 hacking.set_running();
                                 let bt = hacking::Tool::NetScan.name();
                                 hacking.draw_busy(&mut fbuf, bt, i18n::t(app::JOINING));
                                 blit!();
                                 let mut last = Instant::now();
-                                let res = radio.run_netscan(ssid, |st| {
+                                let res = radio.run_netscan(ssid, known, |st| {
                                     let mut stop = false;
                                     while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
                                         if ev.pressed {
@@ -1253,7 +1314,49 @@ fn main() -> ! {
                                     true
                                 });
                                 g0_prev_low = g0.is_low();
-                                hacking.show_attack_done(&mut fbuf, res.map(|r| r.open_count() as u32));
+                                match res {
+                                    Ok(r) if r.got_ip => hacking.show_attack_done(&mut fbuf, Some(r.open_count() as u32)),
+                                    Ok(r) => hacking.show_attack_failed(&mut fbuf, r.phase),
+                                    Err(e) => hacking.show_attack_failed(&mut fbuf, e),
+                                }
+                            }
+                        }
+                        hacking::Action::CamScan => {
+                            if let Some((ssid_buf, ssid_len, _ch)) = hacking.target_ssid_owned() {
+                                let ssid = core::str::from_utf8(&ssid_buf[..ssid_len]).unwrap_or("");
+                                let wk = hacking.wifi_known();
+                                let known = wk.as_ref().map(|(b, l)| core::str::from_utf8(&b[..*l]).unwrap_or(""));
+                                hacking.set_running();
+                                let bt = hacking::Tool::CamScan.name();
+                                hacking.draw_busy(&mut fbuf, bt, i18n::t(app::JOINING));
+                                blit!();
+                                let mut last = Instant::now();
+                                let res = radio.run_camscan(ssid, known, |st| {
+                                    let mut stop = false;
+                                    while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                        if ev.pressed {
+                                            stop = true;
+                                        }
+                                    }
+                                    if g0.is_low() {
+                                        stop = true;
+                                    }
+                                    if stop {
+                                        return false;
+                                    }
+                                    if last.elapsed() >= Duration::from_millis(180) {
+                                        last = Instant::now();
+                                        hacking::draw_camscan(&mut fbuf, st);
+                                        blit!();
+                                    }
+                                    true
+                                });
+                                g0_prev_low = g0.is_low();
+                                match res {
+                                    Ok(r) if r.got_ip => hacking.show_attack_done(&mut fbuf, Some(r.cam_count() as u32)),
+                                    Ok(r) => hacking.show_attack_failed(&mut fbuf, r.phase),
+                                    Err(e) => hacking.show_attack_failed(&mut fbuf, e),
+                                }
                             }
                         }
                         hacking::Action::BleSpam(mode) => {
@@ -1414,6 +1517,51 @@ fn main() -> ! {
         }
 
         // ---- animation tick (~40 ms): LED accent wave (always live) + VU ----
+        // ---- radar live rescan: WiFi/BLE scanner + AP-select keep refreshing so
+        //      distances/blips track as you move (proximity). Scans block briefly,
+        //      so the sweep pauses during each; the anim tick redraws fresh after.
+        if screen == Screen::Hacking && !screen_off {
+            match hacking.radar_kind() {
+                Some(hacking::RadarKind::Wifi) => {
+                    // fast: track the highlighted AP's own channel (~0.5 s)
+                    if last_fast_scan.elapsed() >= Duration::from_millis(500) {
+                        last_fast_scan = Instant::now();
+                        if let Some(ch) = hacking.selected_channel() {
+                            if let Some(aps) = radio.scan_channel(ch) {
+                                for a in &aps {
+                                    hacking.merge_ap(a.ssid.as_str(), a.bssid, a.rssi, a.channel, a.auth);
+                                }
+                            }
+                        }
+                    }
+                    // slow: full refresh + age-out stale APs (~1.6 s)
+                    if last_full_scan.elapsed() >= Duration::from_millis(1600) {
+                        last_full_scan = Instant::now();
+                        if let Some(aps) = radio.scan() {
+                            hacking.begin_wifi_merge();
+                            for a in &aps {
+                                hacking.merge_ap(a.ssid.as_str(), a.bssid, a.rssi, a.channel, a.auth);
+                            }
+                        }
+                    }
+                }
+                Some(hacking::RadarKind::Ble) => {
+                    // BLE scan is a long blocking window; rescan less often so the
+                    // radar animates smoothly between sweeps (was 2.5 s -> jerky).
+                    if last_full_scan.elapsed() >= Duration::from_millis(5000) {
+                        last_full_scan = Instant::now();
+                        if let Some(devs) = radio.ble_scan() {
+                            hacking.begin_ble_merge();
+                            for dv in &devs {
+                                hacking.merge_ble(dv.addr, dv.rssi, dv.name.as_deref());
+                            }
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+
         if last_anim.elapsed() >= Duration::from_millis(40) {
             last_anim = Instant::now();
             led_phase += 0.18;
@@ -1457,6 +1605,7 @@ fn main() -> ! {
                     }
                 }
                 Screen::Games => dirty |= games.tick(&mut fbuf),
+                Screen::Hacking => dirty |= hacking.tick(&mut i2c, &mut fbuf),
                 Screen::Misc => dirty |= misc.tick(&mut i2c, &mut fbuf),
                 Screen::Player => dirty |= player.tick(&mut fbuf),
                 Screen::Stopwatch => dirty |= stopwatch.tick(&mut fbuf),

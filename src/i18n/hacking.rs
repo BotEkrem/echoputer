@@ -16,11 +16,13 @@ pub const EVIL_TWIN: Msg = ["Evil Twin", "Evil Twin"];
 pub const HANDSHAKE_CAPTURE: Msg = ["Handshake Capture", "Handshake Yakalama"];
 pub const EVIL_PORTAL: Msg = ["Evil Portal", "Evil Portal"];
 pub const LAN_SCAN: Msg = ["LAN Scan", "LAN Tarama"];
+pub const CAM_FINDER: Msg = ["Camera Finder", "Kamera Bulucu"];
 pub const BLE_SPAM: Msg = ["BLE Spam", "BLE Spam"];
 
 pub const EVIL_TWIN_PICK_AP: Msg = ["Evil Twin: pick AP", "Evil Twin: AP sec"];
 pub const HANDSHAKE_PICK_AP: Msg = ["Handshake: pick AP", "Handshake: AP sec"];
 pub const LAN_SCAN_PICK_AP: Msg = ["LAN Scan: pick open AP", "LAN Scan: acik AP sec"];
+pub const CAM_FINDER_PICK_AP: Msg = ["Camera Finder: pick open AP", "Kamera Bulucu: acik AP sec"];
 pub const DEAUTH_PICK_TARGET: Msg = ["Deauth: pick target", "Deauth: hedef sec"];
 
 pub const CLONE: Msg = ["clone", "klonla"];
@@ -78,6 +80,11 @@ pub const PORTAL_STOPPED: Msg = ["portal stopped", "portal durdu"];
 pub const CREDENTIALS_CAPTURED: Msg = ["credentials captured", "kimlik yakalandi"];
 pub const SCAN_DONE: Msg = ["scan done", "tarama bitti"];
 pub const OPEN_PORTS: Msg = ["open ports", "acik port"];
+pub const CAMERAS_FOUND: Msg = ["cameras found", "kamera bulundu"];
+pub const MOVE: Msg = ["move", "hareket"];
+pub const WIFI_PASS_TITLE: Msg = ["WiFi password", "WiFi parola"];
+pub const WIFI_PASS_NOTE: Msg = ["know it? type it.  don't? TAB", "biliyorsan yaz. yoksa TAB"];
+pub const WIFI_PASS_HINT: Msg = ["ENTER join   TAB crack   ESC", "ENTER baglan   TAB kir   ESC"];
 pub const STOPPED: Msg = ["stopped", "durdu"];
 pub const ADVERTS: Msg = ["adverts", "reklam"];
 pub const FRAMES: Msg = ["frames", "cerceve"];

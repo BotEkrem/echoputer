@@ -13,6 +13,11 @@ path = "src/main.rs"
 # USB-serial radio self-test: at boot, drive every Hacking tool and print results
 # over serial (no keypresses needed), then fall through to the normal menu.
 selftest = []
+# Network-stack self-test: at boot, run the HTTP-client core tests — canned
+# real-world response parses + request-builder checks + a smoltcp LOOPBACK TCP
+# round-trip against a temp in-firmware HTTP server (no WiFi/AP/DHCP needed) —
+# then fall through to the normal menu. Needs smoltcp's alloc-backed Loopback.
+networktest = ["smoltcp/alloc"]
 # Boot-time IR self-test: loops through protocols/codes/carrier frequencies on GPIO44,
 # logging each over serial, so we can find what a TV actually responds to (point the
 # Cardputer at the TV, flash --features irtest, watch which IRTEST # toggles it).

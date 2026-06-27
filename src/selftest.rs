@@ -124,15 +124,38 @@ pub fn run(radio: &mut Radio) {
     if open_len > 0 {
         let ssid = core::str::from_utf8(&open_ssid[..open_len]).unwrap_or("");
         println!("[*] LAN Scan: join open AP '{}' + DHCP + gateway port-scan...", ssid);
-        match radio.run_netscan(ssid, |_r| true) {
-            Some(r) => {
+        match radio.run_netscan(ssid, Some(""), |_r| true) {
+            Ok(r) => {
                 println!(
                     "    OK  phase={} ip={}.{}.{}.{} gw={}.{}.{}.{} open={}/{} probed",
                     r.phase, r.ip[0], r.ip[1], r.ip[2], r.ip[3], r.gw[0], r.gw[1], r.gw[2], r.gw[3],
                     r.open_count(), r.scanned
                 );
+                if r.banner_len > 0 {
+                    println!("        http banner (real round-trip): {}", r.banner_str());
+                }
             }
-            None => println!("    SKIP  could not associate (open AP gone / out of range)"),
+            Err(e) => println!("    SKIP  {}", e),
+        }
+
+        // 9b. Camera Finder (Tier 3) — sweep the same /24 for HTTP cameras/DVRs.
+        println!("[*] Camera Finder: join '{}' + DHCP + /24 HTTP sweep + fingerprint...", ssid);
+        match radio.run_camscan(ssid, Some(""), |_r| true) {
+            Ok(r) => {
+                println!(
+                    "    OK  phase={} ip={}.{}.{}.{} probed={}/{} live={} cams={} cracked={}",
+                    r.phase, r.ip[0], r.ip[1], r.ip[2], r.ip[3], r.probed, r.total, r.live, r.cam_count(), r.cracked_count()
+                );
+                for h in r.hosts.iter().take(16) {
+                    let cred = if h.cred_len > 0 { h.cred_str() } else { "-" };
+                    println!(
+                        "      {}.{}.{}.{}:{} status={} {:?} [{}] cred={}{}",
+                        h.ip[0], h.ip[1], h.ip[2], h.ip[3], h.port, h.status, h.server_str(), h.brand, cred,
+                        if h.is_camera { "  <-- CAMERA" } else { "" }
+                    );
+                }
+            }
+            Err(e) => println!("    SKIP  {}", e),
         }
     } else {
         println!("[*] LAN Scan: skipped (no open AP in range)");

@@ -97,6 +97,8 @@ pub fn init<I: I2c>(i2c: &mut I) -> bool {
     wr(i2c, addr, 0x7D, 0x0E); // PWR_CTRL: accel + gyro + temp on
     wr(i2c, addr, 0x40, 0xA8); // ACC_CONF: 100 Hz, normal filter
     wr(i2c, addr, 0x41, 0x01); // ACC_RANGE: +-4 g
+    wr(i2c, addr, 0x42, 0xA8); // GYR_CONF: 100 Hz, normal filter
+    wr(i2c, addr, 0x43, 0x00); // GYR_RANGE: +-2000 dps
     d.delay_ms(5);
     READY.store(true, Ordering::Relaxed);
     true
@@ -108,6 +110,20 @@ pub fn read_accel<I: I2c>(i2c: &mut I) -> Option<[f32; 3]> {
     let mut b = [0u8; 6];
     i2c.write_read(addr, &[0x0C], &mut b).ok()?;
     const S: f32 = 4.0 / 32768.0;
+    Some([
+        i16::from_le_bytes([b[0], b[1]]) as f32 * S,
+        i16::from_le_bytes([b[2], b[3]]) as f32 * S,
+        i16::from_le_bytes([b[4], b[5]]) as f32 * S,
+    ])
+}
+
+/// Read the gyroscope as [x, y, z] in deg/s (+-2000 dps full scale). None on I2C
+/// error. Data register 0x12 (DATA_14), right after the accel block.
+pub fn read_gyro<I: I2c>(i2c: &mut I) -> Option<[f32; 3]> {
+    let addr = ADDR.load(Ordering::Relaxed);
+    let mut b = [0u8; 6];
+    i2c.write_read(addr, &[0x12], &mut b).ok()?;
+    const S: f32 = 2000.0 / 32768.0;
     Some([
         i16::from_le_bytes([b[0], b[1]]) as f32 * S,
         i16::from_le_bytes([b[2], b[3]]) as f32 * S,
