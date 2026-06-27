@@ -199,8 +199,9 @@ fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
             SNIFF_TARGET.fetch_add(1, Ordering::Relaxed);
         }
         // a frame addressed TO our BSSID (addr1) from a client (addr2) -> remember the
-        // client so the evil twin can inject msg1 at it.
-        if d[4..10] == target && d[10..16] != target {
+        // client so the evil twin can inject msg1 at it. Skip control frames (type 0b01),
+        // which may not carry a valid addr2.
+        if (d[0] & 0x0C) != 0x04 && d[4..10] == target && d[10..16] != target {
             let c = &d[10..16];
             HS_CLIENT_HI.store(((c[0] as u32) << 8) | c[1] as u32, Ordering::Relaxed);
             HS_CLIENT_LO.store(
@@ -771,7 +772,13 @@ impl Radio {
             ticks += 1;
             // poll progress via the atomics only — must NOT form a reference into HS
             // while the cb may be writing it on the WiFi task (that would alias).
-            let got = HS_M1.load(Ordering::Relaxed) && HS_M2.load(Ordering::Relaxed);
+            // evil-twin supplies its own ANonce, so a captured msg2 alone is enough;
+            // passive sniff needs both msg1 + msg2 off-air.
+            let got = if inject.is_some() {
+                HS_M2.load(Ordering::Relaxed)
+            } else {
+                HS_M1.load(Ordering::Relaxed) && HS_M2.load(Ordering::Relaxed)
+            };
             let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
             if got || ticks % 25 == 0 {
                 // ~5 s serial heartbeat so the 2 min window doesn't flood the log.

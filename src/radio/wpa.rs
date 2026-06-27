@@ -484,7 +484,7 @@ fn m1_builder_ok() -> bool {
     let mut buf = [0u8; super::wifi_frames::EAPOL_M1_LEN + 8];
     let n = super::wifi_frames::eapol_m1(&mut buf, client, ap, &anonce, 1000);
     match parse_eapol(&buf[..n]) {
-        Some(k) => k.msg == 1 && k.nonce == anonce && k.bssid == ap && k.sta == client,
+        Some(k) => k.msg == 1 && k.nonce == anonce && k.bssid == ap && k.sta == client && k.replay == 1000,
         None => false,
     }
 }

@@ -1252,9 +1252,10 @@ fn main() -> ! {
                                 hacking::draw_running(&mut fbuf, title, "EAPOL", 0);
                                 blit!();
                                 let mut last = Instant::now();
-                                // optional SD wordlist (/wifi_pass.txt) on top of the built-in list
-                                let mut wl = alloc::vec![0u8; 8192];
-                                let wln = radio::webui::read_root_file(&vm, "wifi_pass.txt", &mut wl);
+                                // optional SD wordlist (/WIFIPASS.TXT — must be an 8.3 name)
+                                // atop the built-in list. 4 KB cap keeps it heap-light w/ radio up.
+                                let mut wl = alloc::vec![0u8; 4096];
+                                let wln = radio::webui::read_root_file(&vm, "WIFIPASS.TXT", &mut wl);
                                 let extra = if wln > 0 { Some(&wl[..wln]) } else { None };
                                 let res = radio.run_evil_twin(ssid, ch, "00000000", extra, |n: u32| {
                                     let mut stop = false;
@@ -1295,9 +1296,10 @@ fn main() -> ! {
                                 hacking::draw_running(&mut fbuf, title, "EAPOL", 0);
                                 blit!();
                                 let mut last = Instant::now();
-                                // optional SD wordlist (/wifi_pass.txt) on top of the built-in list
-                                let mut wl = alloc::vec![0u8; 8192];
-                                let wln = radio::webui::read_root_file(&vm, "wifi_pass.txt", &mut wl);
+                                // optional SD wordlist (/WIFIPASS.TXT — must be an 8.3 name)
+                                // atop the built-in list. 4 KB cap keeps it heap-light w/ radio up.
+                                let mut wl = alloc::vec![0u8; 4096];
+                                let wln = radio::webui::read_root_file(&vm, "WIFIPASS.TXT", &mut wl);
                                 let extra = if wln > 0 { Some(&wl[..wln]) } else { None };
                                 let res = radio.handshake_crack(ssid, bssid, ch, extra, |n: u32| {
                                     let mut stop = false;
