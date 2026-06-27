@@ -13,6 +13,7 @@
 //! until that wires them into the normal build.)
 #![allow(dead_code)]
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 // --------------------------------- SHA1 ------------------------------------
@@ -232,6 +233,37 @@ pub fn crack_bytes(
     None
 }
 
+/// Render the handshake as a hashcat **WPA mode 22000** EAPOL line:
+/// `WPA*02*MIC*AP_MAC*STA_MAC*ESSID*ANONCE*EAPOL*MESSAGEPAIR`. This is the offload
+/// export — drop it on the SD, then crack on a PC with `hashcat -m 22000` (or feed a
+/// crack server). EAPOL is the msg2 802.1X frame with its MIC field already zeroed,
+/// exactly what `check_passphrase` consumes.
+pub fn to_hc22000(hs: &Handshake) -> String {
+    let mut s = String::new();
+    s.push_str("WPA*02*");
+    hex_push(&mut s, &hs.mic);
+    s.push('*');
+    hex_push(&mut s, &hs.ap_mac);
+    s.push('*');
+    hex_push(&mut s, &hs.cli_mac);
+    s.push('*');
+    hex_push(&mut s, &hs.ssid[..hs.ssid_len]);
+    s.push('*');
+    hex_push(&mut s, &hs.anonce);
+    s.push('*');
+    hex_push(&mut s, &hs.eapol[..hs.eapol_len]);
+    s.push_str("*00"); // messagepair: M1 + M2, EAPOL taken from msg2
+    s
+}
+
+fn hex_push(s: &mut String, b: &[u8]) {
+    const H: &[u8; 16] = b"0123456789abcdef";
+    for &x in b {
+        s.push(H[(x >> 4) as usize] as char);
+        s.push(H[(x & 0x0f) as usize] as char);
+    }
+}
+
 // --------------------------- 802.11 / EAPOL parse ---------------------------
 
 /// One parsed EAPOL-Key frame lifted out of a raw promiscuous 802.11 capture.
@@ -428,8 +460,34 @@ pub fn networktest() {
         fail += 1;
         println!("    FAIL m1 builder roundtrip");
     }
+    // .22000 export: structure + field placement of the hashcat line.
+    if hc22000_ok() {
+        pass += 1;
+    } else {
+        fail += 1;
+        println!("    FAIL hc22000 export format");
+    }
 
     println!("    wpa crypto: {pass} pass, {fail} fail");
+}
+
+/// Verify the hashcat 22000 export has the right 9 `*`-separated fields with the
+/// expected lengths and the SSID hex, from a known synthetic handshake.
+#[cfg(feature = "networktest")]
+fn hc22000_ok() -> bool {
+    let hs = synth_handshake("12345678", "test");
+    let line = to_hc22000(&hs);
+    let parts: Vec<&str> = line.split('*').collect();
+    parts.len() == 9
+        && parts[0] == "WPA"
+        && parts[1] == "02"
+        && parts[2].len() == 32 // MIC (16 B)
+        && parts[3].len() == 12 // AP MAC
+        && parts[4].len() == 12 // STA MAC
+        && parts[5] == "74657374" // "test"
+        && parts[6].len() == 64 // ANonce (32 B)
+        && !parts[7].is_empty() // EAPOL
+        && parts[8] == "00"
 }
 
 /// Build a known-crackable synthetic Handshake (passphrase `psk`, ssid `ssid`) for

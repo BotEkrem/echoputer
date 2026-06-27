@@ -225,6 +225,24 @@ fn build_request<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, auth: Optio
     &buf[..n]
 }
 
+/// Build an HTTP/1.0 POST with a text body — the crack-server offload: POST a `.22000`
+/// line to a server, then read the recovered passphrase from the response body. The
+/// body is `&str` since a `.22000` line is ASCII. (Builder + self-test only for now;
+/// the live association-to-server + send is a field step.)
+#[cfg_attr(not(feature = "networktest"), allow(dead_code))]
+fn build_post<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, body: &str) -> &'a [u8] {
+    use core::fmt::Write;
+    let o = ip.octets();
+    let mut w = Buf { b: buf, n: 0 };
+    let _ = write!(
+        w,
+        "POST {} HTTP/1.0\r\nHost: {}.{}.{}.{}\r\nUser-Agent: echoputer\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        path, o[0], o[1], o[2], o[3], body.len(), body
+    );
+    let n = w.n;
+    &buf[..n]
+}
+
 // ------------------------------ response parse -----------------------------
 
 fn parse_head(buf: &[u8], resp: &mut HttpResp) {
@@ -368,6 +386,21 @@ pub fn networktest() {
         let mut tiny = [0u8; 10];
         let _ = build_request(&mut tiny, "/", Ipv4Address::new(1, 2, 3, 4), None);
         pass += 1;
+    }
+    // ---- (A3) POST builder (crack-server offload) ----
+    {
+        let mut buf = [0u8; 256];
+        let req = build_post(&mut buf, "/crack", Ipv4Address::new(10, 0, 0, 2), "WPA*02*ab");
+        let s = core::str::from_utf8(req).unwrap_or("");
+        if s.starts_with("POST /crack HTTP/1.0\r\n")
+            && s.contains("\r\nContent-Length: 9\r\n")
+            && s.ends_with("\r\n\r\nWPA*02*ab")
+        {
+            pass += 1;
+        } else {
+            fail += 1;
+            println!("    FAIL build post: {s:?}");
+        }
     }
     println!("    parser+builder: {pass} pass, {fail} fail");
 

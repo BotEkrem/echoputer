@@ -99,6 +99,20 @@ pub fn read_root_file<D: BlockDevice, T: TimeSource>(vm: &VolumeManager<D, T>, n
     n
 }
 
+/// Write `bytes` to a root-level SD file (truncate/create), returning true on success.
+/// `name` MUST be an 8.3 short name (e.g. "HS22000.TXT" — base <=8, ext <=3). Used to
+/// export the captured handshake as a hashcat .22000 line.
+pub fn write_root_file<D: BlockDevice, T: TimeSource>(vm: &VolumeManager<D, T>, name: &str, bytes: &[u8]) -> bool {
+    (|| -> Option<()> {
+        let vol = vm.open_volume(VolumeIdx(0)).ok()?;
+        let dir = vol.open_root_dir().ok()?;
+        let f = dir.open_file_in_dir(name, Mode::ReadWriteCreateOrTruncate).ok()?;
+        f.write(bytes).ok()?;
+        Some(())
+    })()
+    .is_some()
+}
+
 /// Find the long name mapped to an 8.3 `short` within a loaded index buffer.
 fn index_lookup<'a>(idx: &'a [u8], short: &[u8]) -> Option<&'a [u8]> {
     let mut i = 0;

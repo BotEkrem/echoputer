@@ -1279,7 +1279,13 @@ fn main() -> ! {
                                 });
                                 g0_prev_low = g0.is_low();
                                 match res {
-                                    Some(o) => hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked.as_deref()),
+                                    Some(o) => {
+                                        // export the captured handshake (.22000) to SD for PC/offload cracking
+                                        if let Some(ref line) = o.hc22000 {
+                                            let _ = radio::webui::write_root_file(&vm, "HS22000.TXT", line.as_bytes());
+                                        }
+                                        hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked.as_deref());
+                                    }
                                     None => hacking.show_attack_failed(&mut fbuf, "radio busy"),
                                 }
                             }
@@ -1323,7 +1329,13 @@ fn main() -> ! {
                                 });
                                 g0_prev_low = g0.is_low();
                                 match res {
-                                    Some(o) => hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked.as_deref()),
+                                    Some(o) => {
+                                        // export the captured handshake (.22000) to SD for PC/offload cracking
+                                        if let Some(ref line) = o.hc22000 {
+                                            let _ = radio::webui::write_root_file(&vm, "HS22000.TXT", line.as_bytes());
+                                        }
+                                        hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked.as_deref());
+                                    }
                                     None => hacking.show_attack_failed(&mut fbuf, "radio busy"),
                                 }
                             }

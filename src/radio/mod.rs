@@ -71,9 +71,10 @@ pub struct DetResult {
 
 /// Outcome of a WPA handshake capture + offline crack attempt.
 pub struct HsOutcome {
-    pub eapol: u32,             // EAPOL frames seen (progress / capture evidence)
-    pub captured: bool,         // a usable handshake for the target was extracted
+    pub eapol: u32,              // EAPOL frames seen (progress / capture evidence)
+    pub captured: bool,          // a usable handshake for the target was extracted
     pub cracked: Option<String>, // the passphrase, if a built-in or wordlist candidate matched
+    pub hc22000: Option<String>, // the hashcat .22000 line (when captured) for SD export / offload
 }
 
 // ------------------------- detector RX callback --------------------------
@@ -823,7 +824,7 @@ impl Radio {
             snap.have_m1 && snap.have_m2 && snap.eapol_len > 0
         };
         if !ok {
-            return Some(HsOutcome { eapol, captured: false, cracked: None });
+            return Some(HsOutcome { eapol, captured: false, cracked: None, hc22000: None });
         }
         // assemble the handshake exactly as wpa::check_passphrase expects
         let mut hs = wpa::Handshake::new();
@@ -858,7 +859,8 @@ impl Radio {
                 cracked = wpa::crack_bytes(&hs, bytes, |i| tick(base + i));
             }
         }
-        Some(HsOutcome { eapol, captured: true, cracked })
+        let hc22000 = Some(wpa::to_hc22000(&hs)); // standard export for SD / offload
+        Some(HsOutcome { eapol, captured: true, cracked, hc22000 })
     }
 
     /// EVIL-TWIN half-handshake capture: stand up a WPA2-PSK softAP advertising
