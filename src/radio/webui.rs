@@ -239,6 +239,10 @@ pub fn dhcp_only(sta: WifiIface<'static>, mac: [u8; 6], mut tick: impl FnMut() -
 
 /// Serve until `tick(&ServeState)` returns false (the user aborts). `vm` is the
 /// SD volume manager; `sys` is the dashboard's system page.
+// inline(never): this is a large function; keeping it out of `main` keeps
+// `.text.main` under the Xtensa l32r literal-range limit (it overflowed once
+// handshake_crack's logging grew main — see radio::mod).
+#[inline(never)]
 pub fn serve<D: BlockDevice, T: TimeSource>(
     sta: WifiIface<'static>,
     mac: [u8; 6],
