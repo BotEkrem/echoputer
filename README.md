@@ -16,6 +16,13 @@ an evenly spaced hue wheel, so the home screen reads as a gradient and whatever
 app you are in tints the top bar and the RGB LED to match. And the whole interface
 is bilingual, English and Turkish, switchable live from Settings.
 
+Full technical documentation lives in the
+[wiki](https://github.com/BotEkrem/echoputer/wiki): a page per subsystem — the
+boot path, the hardware and pinout, the build/release pipeline, every app, and
+the security toolkit — each explaining what the thing is and how it actually
+works, down to the protocols and algorithms behind it, with citations. The notes
+below are the quick tour; the wiki is the deep dive.
+
 ## Apps
 
 Hacking is the security toolkit and has its own section below. The rest:
