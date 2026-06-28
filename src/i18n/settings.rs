@@ -21,3 +21,13 @@ pub const SHOW_HIDDEN: Msg = ["Show hidden", "Gizliyi goster"];
 pub const CONFIRM_DEL: Msg = ["Confirm del", "Silme onayi"];
 pub const SIZE: Msg = ["Size", "Boyut"];
 pub const NAME: Msg = ["Name", "Isim"];
+
+// Offload server (WPA crack-offload) — typed fields
+pub const OFFLOAD: Msg = ["OFFLOAD SERVER", "OFFLOAD SUNUCU"];
+pub const OFF_HOST: Msg = ["Server IP", "Sunucu IP"];
+pub const OFF_PORT: Msg = ["Server port", "Sunucu port"];
+pub const OFF_PSK: Msg = ["Shared key", "Paylasilan anahtar"];
+pub const OFF_UPLINK: Msg = ["Uplink WiFi", "Uplink WiFi"];
+pub const OFF_UPASS: Msg = ["Uplink pass", "Uplink parola"];
+pub const SET: Msg = ["set", "ayarli"];
+pub const EDIT_HINT: Msg = ["type   Aa case   bksp   ENTER ok   ESC cancel", "yaz   Aa buyuk/kucuk   bksp   ENTER tamam   ESC iptal"];

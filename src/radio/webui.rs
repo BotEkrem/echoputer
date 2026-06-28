@@ -10,6 +10,8 @@
 //! chunks, polling smoltcp between chunks, so nothing buffers a whole file in RAM.
 
 use embedded_sdmmc::{BlockDevice, Mode, TimeSource, VolumeIdx, VolumeManager};
+
+use crate::config::OffloadCfg;
 use esp_hal::time::{Duration, Instant};
 use esp_radio::wifi::Interface as WifiIface;
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
@@ -435,6 +437,8 @@ fn handle_request<D: BlockDevice, T: TimeSource>(
             send_listing(h, iface, device, sockets, t0, vm, query);
         } else if path == b"/download" {
             send_file(h, iface, device, sockets, t0, vm, query);
+        } else if path == b"/offload" {
+            send_offload_form(h, iface, device, sockets, t0, vm);
         } else {
             send_all(h, iface, device, sockets, t0, RESP_404);
         }
@@ -456,12 +460,181 @@ fn handle_request<D: BlockDevice, T: TimeSource>(
     } else if path == b"/mkdir" {
         let ok = fs_mkdir(vm, query);
         send_all(h, iface, device, sockets, t0, if ok { RESP_OK } else { RESP_500 });
+    } else if path == b"/offload" {
+        save_offload(h, iface, device, sockets, t0, vm, &head[head_end..hlen], content_len);
     } else {
         // drain any small body then 404
         let _ = (body_in_head, content_len);
         send_all(h, iface, device, sockets, t0, RESP_404);
     }
 }
+
+// ----------------------------- offload config -----------------------------
+
+/// `GET /offload` — an HTML form to edit the WPA crack-offload server config,
+/// prefilled from `/OFFLOAD.CFG`.
+fn send_offload_form<D: BlockDevice, T: TimeSource>(
+    h: smoltcp::iface::SocketHandle,
+    iface: &mut Interface,
+    device: &mut WifiPhy,
+    sockets: &mut SocketSet,
+    t0: Instant,
+    vm: &VolumeManager<D, T>,
+) {
+    let mut c = OffloadCfg::new();
+    c.load(vm);
+    let body = alloc::format!(
+        "<!doctype html><meta name=viewport content=\"width=device-width,initial-scale=1\">\
+<title>Offload</title><style>body{{font-family:sans-serif;max-width:440px;margin:1em auto;padding:0 1em;background:#111;color:#eee}}\
+input{{width:100%;padding:.5em;margin:.2em 0 .8em;box-sizing:border-box;background:#222;color:#eee;border:1px solid #444}}\
+label{{font-weight:bold}}button{{padding:.6em 1.4em;font-size:1em}}a{{color:#6cf}}</style>\
+<h2>WPA crack-offload server</h2><form method=post action=/offload>\
+<label>Server IP</label><input name=host value=\"{}\">\
+<label>Port</label><input name=port value=\"{}\">\
+<label>Shared key (PSK)</label><input name=psk value=\"{}\">\
+<label>Uplink WiFi SSID</label><input name=uplink value=\"{}\">\
+<label>Uplink WiFi password</label><input name=upass value=\"{}\">\
+<button type=submit>Save</button></form>\
+<p>Captured handshakes that don't crack on-device are POSTed here with the PSK. \
+Keep this server on a trusted LAN. <a href=/>&larr; dashboard</a></p>",
+        html_attr(c.host_str()),
+        c.port,
+        html_attr(c.psk_str()),
+        html_attr(c.uplink_ssid_str()),
+        html_attr(c.uplink_pass_str())
+    );
+    send_headers(h, iface, device, sockets, t0, b"text/html", body.len());
+    send_all(h, iface, device, sockets, t0, body.as_bytes());
+}
+
+/// Escape a string for safe interpolation into an HTML `value="..."` attribute,
+/// so a stored quote/angle-bracket can't break out of the form (self-XSS on reopen).
+fn html_attr(s: &str) -> alloc::string::String {
+    let mut o = alloc::string::String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => o.push_str("&amp;"),
+            '"' => o.push_str("&quot;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+/// `POST /offload` — parse the urlencoded form, save to `/OFFLOAD.CFG`, redirect back.
+fn save_offload<D: BlockDevice, T: TimeSource>(
+    h: smoltcp::iface::SocketHandle,
+    iface: &mut Interface,
+    device: &mut WifiPhy,
+    sockets: &mut SocketSet,
+    t0: Instant,
+    vm: &VolumeManager<D, T>,
+    initial: &[u8],
+    content_len: usize,
+) {
+    let mut bodybuf = [0u8; 1024];
+    // worst case = all five fields full + %-expansion; refuse rather than save a truncated config.
+    if content_len > bodybuf.len() {
+        send_all(h, iface, device, sockets, t0, RESP_400);
+        return;
+    }
+    let n = recv_body(h, iface, device, sockets, t0, initial, content_len, &mut bodybuf);
+    let body = &bodybuf[..n];
+    let mut c = OffloadCfg::new();
+    let mut v = [0u8; 80];
+    c.set_host(form_value(body, b"host", &mut v));
+    c.set_port(form_value(body, b"port", &mut v));
+    c.set_psk(form_value(body, b"psk", &mut v));
+    c.set_uplink_ssid(form_value(body, b"uplink", &mut v));
+    c.set_uplink_pass(form_value(body, b"upass", &mut v));
+    c.save(vm);
+    send_all(h, iface, device, sockets, t0, RESP_REDIR_OFFLOAD);
+}
+
+/// Read a POST body (`initial` already-buffered + more from the socket) into `out`.
+fn recv_body(
+    h: smoltcp::iface::SocketHandle,
+    iface: &mut Interface,
+    device: &mut WifiPhy,
+    sockets: &mut SocketSet,
+    t0: Instant,
+    initial: &[u8],
+    content_len: usize,
+    out: &mut [u8],
+) -> usize {
+    let want = content_len.min(out.len());
+    let mut n = initial.len().min(want);
+    out[..n].copy_from_slice(&initial[..n]);
+    let start = Instant::now();
+    while n < want {
+        poll(iface, device, sockets, t0);
+        let s = sockets.get_mut::<tcp::Socket>(h);
+        if s.can_recv() {
+            let got = s.recv_slice(&mut out[n..want]).unwrap_or(0);
+            if got > 0 {
+                n += got;
+                continue;
+            }
+        }
+        if !s.may_recv() && !s.can_recv() {
+            break;
+        }
+        if start.elapsed() >= Duration::from_secs(5) {
+            break;
+        }
+    }
+    n
+}
+
+/// Look up `key` in an x-www-form-urlencoded body, %-decode its value into `out`.
+fn form_value<'a>(body: &[u8], key: &[u8], out: &'a mut [u8]) -> &'a str {
+    let mut i = 0;
+    while i < body.len() {
+        let kstart = i;
+        let mut j = i;
+        while j < body.len() && body[j] != b'=' && body[j] != b'&' {
+            j += 1;
+        }
+        if j < body.len() && body[j] == b'=' && &body[kstart..j] == key {
+            let mut p = j + 1;
+            let mut w = 0;
+            while p < body.len() && body[p] != b'&' && w < out.len() {
+                match body[p] {
+                    b'+' => {
+                        out[w] = b' ';
+                        p += 1;
+                    }
+                    b'%' if p + 2 < body.len() => match (hexval(body[p + 1]), hexval(body[p + 2])) {
+                        (Some(hi), Some(lo)) => {
+                            out[w] = (hi << 4) | lo;
+                            p += 3;
+                        }
+                        _ => {
+                            out[w] = b'%';
+                            p += 1;
+                        }
+                    },
+                    c => {
+                        out[w] = c;
+                        p += 1;
+                    }
+                }
+                w += 1;
+            }
+            return core::str::from_utf8(&out[..w]).unwrap_or("");
+        }
+        i = j;
+        while i < body.len() && body[i] != b'&' {
+            i += 1;
+        }
+        i += 1;
+    }
+    ""
+}
+
+const RESP_REDIR_OFFLOAD: &[u8] = b"HTTP/1.1 303 See Other\r\nLocation: /offload\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 // ----------------------------- responses --------------------------------
 

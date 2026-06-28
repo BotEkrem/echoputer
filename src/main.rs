@@ -294,6 +294,9 @@ fn main() -> ! {
     let mut config = crate::config::Config::new();
     config.load(&vm); // best-effort: no card / no file -> defaults
     config.apply_lang(); // set UI language before the first frame is drawn
+    // WPA crack-offload "server provider" config (edited in Settings + the Web UI).
+    let mut offload = crate::config::OffloadCfg::new();
+    offload.load(&vm);
     // (accent is set per-app from the palette wheel — see menu::draw / app entry)
     let _ = backlight.set_duty(bl_pct(config.disp_bright));
 
@@ -668,6 +671,7 @@ fn main() -> ! {
                         Screen::Notes => notes.toggle_caps(&mut fbuf),
                         Screen::WebUi => webui.toggle_caps(&mut fbuf),
                         Screen::Misc => misc.toggle_caps(&mut fbuf),
+                        Screen::Settings => settings_ui.toggle_caps(&mut fbuf, &config, &offload),
                         _ => {}
                     }
                     last_input = Instant::now();
@@ -759,8 +763,15 @@ fn main() -> ! {
                             menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                         }
                     }
+                    Screen::Settings => {
+                        // ESC cancels an in-progress offload-field edit; else pops to menu.
+                        if !settings_ui.back(&mut fbuf, &config, &offload) {
+                            screen = Screen::Menu;
+                            menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
+                        }
+                    }
                     _ => {
-                        // flat screens (Synth, Settings, Sysinfo, Stopwatch, Browser, Charge,
+                        // flat screens (Synth, Sysinfo, Stopwatch, Browser, Charge,
                         // Repl): one level up = the home menu.
                         screen = Screen::Menu;
                         menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
@@ -882,7 +893,7 @@ fn main() -> ! {
                         menu::AppKind::Settings => {
                             screen = Screen::Settings;
                             synth.silence();
-                            settings_ui.enter(&mut fbuf, &config);
+                            settings_ui.enter(&mut fbuf, &config, &offload);
                         }
                         menu::AppKind::Hacking => {
                             screen = Screen::Hacking;
@@ -1085,12 +1096,14 @@ fn main() -> ! {
                 Screen::Notes => notes.on_key(rc, &vm, &mut fbuf),
                 Screen::Player => player.on_key(rc, &vm, &mut fbuf),
                 Screen::Browser => browser.on_key(rc, &vm, &mut fbuf),
-                Screen::Settings => {
-                    if settings_ui.on_key(rc, &mut config, &mut fbuf) {
+                Screen::Settings => match settings_ui.on_key(rc, &mut config, &mut offload, &mut fbuf) {
+                    settings::Saved::Config => {
                         config.save(&vm); // persist (no-op if no SD card)
                         let _ = backlight.set_duty(bl_pct(config.disp_bright)); // live apply
                     }
-                }
+                    settings::Saved::Offload => offload.save(&vm), // /OFFLOAD.CFG
+                    settings::Saved::None => {}
+                },
                 Screen::Charge => {} // view-only; ` or G0 returns to the menu
                 Screen::Hacking => {
                     // Recon tools draw a "busy" screen then run a one-shot blocking
@@ -1285,7 +1298,76 @@ fn main() -> ! {
                                         if let Some(ref line) = o.hc22000 {
                                             let _ = radio::webui::write_root_file(&vm, "HS22000.TXT", line.as_bytes());
                                         }
-                                        hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked.as_deref());
+                                        // captured but the on-device weak list missed: if a crack-offload
+                                        // server is configured (Settings or Web UI), ship the .22000 to it.
+                                        offload.load(&vm);
+                                        let want_offload = o.captured
+                                            && o.cracked.is_none()
+                                            && o.hc22000.is_some()
+                                            && offload.configured();
+                                        if want_offload {
+                                            let line = o.hc22000.as_deref().unwrap_or("");
+                                            hacking::draw_running(&mut fbuf, title, "OFFLOAD", 0);
+                                            blit!();
+                                            let mut last = Instant::now();
+                                            let mut g0_was_low = g0.is_low();
+                                            let psk = if offload.psk_len > 0 {
+                                                Some(offload.psk_str())
+                                            } else {
+                                                None
+                                            };
+                                            let r = radio.run_offload(
+                                                offload.uplink_ssid_str(),
+                                                offload.uplink_pass_str(),
+                                                offload.host_str(),
+                                                offload.port,
+                                                psk,
+                                                line,
+                                                |st| {
+                                                    let mut stop = false;
+                                                    while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                                        if ev.pressed {
+                                                            stop = true;
+                                                        }
+                                                    }
+                                                    // edge-detect G0: a button still held from the
+                                                    // capture step must not insta-abort the offload.
+                                                    let lo = g0.is_low();
+                                                    if lo && !g0_was_low {
+                                                        stop = true;
+                                                    }
+                                                    g0_was_low = lo;
+                                                    if stop {
+                                                        return false;
+                                                    }
+                                                    if last.elapsed() >= Duration::from_millis(200) {
+                                                        last = Instant::now();
+                                                        hacking::draw_running(&mut fbuf, title, st.phase, 0);
+                                                        blit!();
+                                                    }
+                                                    true
+                                                },
+                                            );
+                                            g0_prev_low = g0.is_low();
+                                            match r {
+                                                Ok(Some(pw)) => hacking.show_handshake(
+                                                    &mut fbuf,
+                                                    o.eapol,
+                                                    o.captured,
+                                                    Some(pw.as_str()),
+                                                ),
+                                                Ok(None) => hacking
+                                                    .show_attack_failed(&mut fbuf, "offload: no crack"),
+                                                Err(e) => hacking.show_attack_failed(&mut fbuf, e),
+                                            }
+                                        } else {
+                                            hacking.show_handshake(
+                                                &mut fbuf,
+                                                o.eapol,
+                                                o.captured,
+                                                o.cracked.as_deref(),
+                                            );
+                                        }
                                     }
                                     None => hacking.show_attack_failed(&mut fbuf, "radio busy"),
                                 }
@@ -1335,7 +1417,76 @@ fn main() -> ! {
                                         if let Some(ref line) = o.hc22000 {
                                             let _ = radio::webui::write_root_file(&vm, "HS22000.TXT", line.as_bytes());
                                         }
-                                        hacking.show_handshake(&mut fbuf, o.eapol, o.captured, o.cracked.as_deref());
+                                        // captured but the on-device weak list missed: if a crack-offload
+                                        // server is configured (Settings or Web UI), ship the .22000 to it.
+                                        offload.load(&vm);
+                                        let want_offload = o.captured
+                                            && o.cracked.is_none()
+                                            && o.hc22000.is_some()
+                                            && offload.configured();
+                                        if want_offload {
+                                            let line = o.hc22000.as_deref().unwrap_or("");
+                                            hacking::draw_running(&mut fbuf, title, "OFFLOAD", 0);
+                                            blit!();
+                                            let mut last = Instant::now();
+                                            let mut g0_was_low = g0.is_low();
+                                            let psk = if offload.psk_len > 0 {
+                                                Some(offload.psk_str())
+                                            } else {
+                                                None
+                                            };
+                                            let r = radio.run_offload(
+                                                offload.uplink_ssid_str(),
+                                                offload.uplink_pass_str(),
+                                                offload.host_str(),
+                                                offload.port,
+                                                psk,
+                                                line,
+                                                |st| {
+                                                    let mut stop = false;
+                                                    while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                                        if ev.pressed {
+                                                            stop = true;
+                                                        }
+                                                    }
+                                                    // edge-detect G0: a button still held from the
+                                                    // capture step must not insta-abort the offload.
+                                                    let lo = g0.is_low();
+                                                    if lo && !g0_was_low {
+                                                        stop = true;
+                                                    }
+                                                    g0_was_low = lo;
+                                                    if stop {
+                                                        return false;
+                                                    }
+                                                    if last.elapsed() >= Duration::from_millis(200) {
+                                                        last = Instant::now();
+                                                        hacking::draw_running(&mut fbuf, title, st.phase, 0);
+                                                        blit!();
+                                                    }
+                                                    true
+                                                },
+                                            );
+                                            g0_prev_low = g0.is_low();
+                                            match r {
+                                                Ok(Some(pw)) => hacking.show_handshake(
+                                                    &mut fbuf,
+                                                    o.eapol,
+                                                    o.captured,
+                                                    Some(pw.as_str()),
+                                                ),
+                                                Ok(None) => hacking
+                                                    .show_attack_failed(&mut fbuf, "offload: no crack"),
+                                                Err(e) => hacking.show_attack_failed(&mut fbuf, e),
+                                            }
+                                        } else {
+                                            hacking.show_handshake(
+                                                &mut fbuf,
+                                                o.eapol,
+                                                o.captured,
+                                                o.cracked.as_deref(),
+                                            );
+                                        }
                                     }
                                     None => hacking.show_attack_failed(&mut fbuf, "radio busy"),
                                 }

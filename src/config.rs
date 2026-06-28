@@ -183,10 +183,21 @@ impl OffloadCfg {
         self.host_len > 0 && self.uplink_ssid_len > 0
     }
 
+    /// Copy `v` into `dst`, dropping control bytes (`< 0x20`, incl. `\n`/`\r`) so a
+    /// value can never span a config line — otherwise a stray/injected newline would
+    /// split into a second `key=value` line and silently overwrite other fields.
     fn set(dst: &mut [u8], len: &mut usize, v: &str) {
-        let b = v.as_bytes();
-        let n = b.len().min(dst.len());
-        dst[..n].copy_from_slice(&b[..n]);
+        let mut n = 0;
+        for &b in v.as_bytes() {
+            if b < 0x20 {
+                continue;
+            }
+            if n == dst.len() {
+                break;
+            }
+            dst[n] = b;
+            n += 1;
+        }
         *len = n;
     }
     pub fn set_host(&mut self, v: &str) {
@@ -203,7 +214,9 @@ impl OffloadCfg {
     }
     pub fn set_port(&mut self, v: &str) {
         if let Ok(p) = v.trim().parse::<u16>() {
-            self.port = p;
+            if p != 0 {
+                self.port = p;
+            }
         }
     }
 
@@ -293,9 +306,23 @@ pub fn networktest() {
         && c.configured();
     let c2 = OffloadCfg::parse(c.serialize().as_bytes());
     let rt = c2.host_str() == "192.168.1.50" && c2.port == 9000 && c2.psk_str() == "deadbeef" && c2.uplink_ssid_str() == "LabNet";
-    let pass = (ok as u32) + (rt as u32);
-    if pass != 2 {
-        println!("    FAIL offload cfg: parse={ok} roundtrip={rt}");
+    // injection: a value carrying a newline (e.g. WebUI %0A) must NOT split into a
+    // second key=value line that overwrites another field. set() strips control bytes.
+    let mut inj = OffloadCfg::new();
+    inj.set_host("1.2.3.4\nupass=evil");
+    inj.set_psk("ok");
+    let inj2 = OffloadCfg::parse(inj.serialize().as_bytes());
+    let no_inj = inj2.host_str() == "1.2.3.4upass=evil"
+        && inj2.uplink_pass_str().is_empty()
+        && inj2.psk_str() == "ok";
+    // port 0 is rejected (keeps the default), bad strings ignored
+    let mut pc = OffloadCfg::new();
+    pc.set_port("0");
+    pc.set_port("70000");
+    let port_ok = pc.port == 8080;
+    let pass = (ok as u32) + (rt as u32) + (no_inj as u32) + (port_ok as u32);
+    if pass != 4 {
+        println!("    FAIL offload cfg: parse={ok} roundtrip={rt} no_inj={no_inj} port={port_ok}");
     }
-    println!("    offload cfg: {pass} pass, {} fail", 2 - pass);
+    println!("    offload cfg: {pass} pass, {} fail", 4 - pass);
 }

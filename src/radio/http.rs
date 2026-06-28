@@ -65,7 +65,7 @@ impl HttpResp {
     /// number of bytes written. Lets a caller fill a fixed buffer without alloc.
     pub fn write_banner(&self, port: u16, dst: &mut [u8]) -> usize {
         use core::fmt::Write;
-        let mut w = Buf { b: dst, n: 0 };
+        let mut w = Buf { b: dst, n: 0, overflow: false };
         let srv = self.server_str();
         if !srv.is_empty() {
             let _ = write!(w, "{} {}", port, srv);
@@ -197,6 +197,10 @@ pub fn http_head(
 /// — the crack-offload reply (the recovered passphrase, or empty). `None` on connect/IO
 /// failure. Mirrors `http_head` but sends a body and returns the response body. The read
 /// window is long because the server runs hashcat synchronously before replying.
+/// Returns `(status, body)`: the HTTP status code (`0` = connect/send/read failure,
+/// truncated request, or user abort) and the trimmed response body (`None` if empty).
+/// `tick() -> false` aborts the long synchronous-crack read wait. The caller maps
+/// the status (200 = passphrase body; 403/503 = the server's auth/busy errors).
 #[allow(dead_code)] // the device-side offload flow wires this (assoc -> post_body)
 #[allow(clippy::too_many_arguments)]
 pub fn post_body(
@@ -211,14 +215,21 @@ pub fn post_body(
     key: Option<&str>,
     local_port: u16,
     now: &dyn Fn() -> SmolInstant,
-) -> Option<alloc::string::String> {
+    mut tick: impl FnMut() -> bool,
+) -> (u16, Option<alloc::string::String>) {
+    // ---- (0) build the request first; refuse if it doesn't fit (no corrupt body) ----
+    let mut reqbuf = [0u8; 1024];
+    let req_len = build_post(&mut reqbuf, path, ip, body, key).len();
+    if req_len == 0 {
+        return (0, None); // .22000 line too big for the request buffer
+    }
     // ---- (1) fresh connection ----
     {
         let cx = iface.context();
         let s = sockets.get_mut::<tcp::Socket>(tcp_h);
         s.abort();
         if s.connect(cx, (ip, port), local_port).is_err() {
-            return None;
+            return (0, None);
         }
     }
     let t = Instant::now();
@@ -229,16 +240,14 @@ pub fn post_body(
             break;
         }
         if st == tcp::State::Closed && t.elapsed() >= Duration::from_millis(80) {
-            return None;
+            return (0, None);
         }
         if t.elapsed() >= Duration::from_millis(900) {
             sockets.get_mut::<tcp::Socket>(tcp_h).abort();
-            return None;
+            return (0, None);
         }
     }
-    // ---- (2) send the POST (a full .22000 line + headers + key fits in 768) ----
-    let mut reqbuf = [0u8; 768];
-    let req = build_post(&mut reqbuf, path, ip, body, key);
+    // ---- (2) send the POST ----
     {
         let t2 = Instant::now();
         let mut sent = 0usize;
@@ -246,10 +255,10 @@ pub fn post_body(
             iface.poll(now(), device, sockets);
             let s = sockets.get_mut::<tcp::Socket>(tcp_h);
             if s.can_send() {
-                match s.send_slice(&req[sent..]) {
+                match s.send_slice(&reqbuf[sent..req_len]) {
                     Ok(k) => {
                         sent += k;
-                        if sent >= req.len() {
+                        if sent >= req_len {
                             break;
                         }
                     }
@@ -258,7 +267,7 @@ pub fn post_body(
             }
             if t2.elapsed() >= Duration::from_millis(500) {
                 sockets.get_mut::<tcp::Socket>(tcp_h).abort();
-                return None;
+                return (0, None);
             }
         }
     }
@@ -284,17 +293,29 @@ pub fn post_body(
         } else if matches!(s.state(), tcp::State::CloseWait | tcp::State::Closed) {
             break;
         }
+        if !tick() {
+            sockets.get_mut::<tcp::Socket>(tcp_h).abort();
+            return (0, None); // user abort during the crack wait
+        }
         if t3.elapsed() >= Duration::from_secs(90) {
             break;
         }
     }
     sockets.get_mut::<tcp::Socket>(tcp_h).abort();
-    let b = resp_body(&buf[..filled]);
-    if b.is_empty() {
+    let resp = &buf[..filled];
+    // status line: "HTTP/1.x SSS ..."
+    let status = if resp.len() >= 12 && &resp[..7] == b"HTTP/1." && resp[9..12].iter().all(u8::is_ascii_digit) {
+        (resp[9] - b'0') as u16 * 100 + (resp[10] - b'0') as u16 * 10 + (resp[11] - b'0') as u16
+    } else {
+        0
+    };
+    let b = resp_body(resp);
+    let body_opt = if b.is_empty() {
         None
     } else {
         Some(alloc::string::String::from_utf8_lossy(b).trim().into())
-    }
+    };
+    (status, body_opt)
 }
 
 // ----------------------------- request build ------------------------------
@@ -302,6 +323,7 @@ pub fn post_body(
 struct Buf<'a> {
     b: &'a mut [u8],
     n: usize,
+    overflow: bool,
 }
 impl core::fmt::Write for Buf<'_> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -309,6 +331,9 @@ impl core::fmt::Write for Buf<'_> {
         let take = core::cmp::min(bytes.len(), self.b.len().saturating_sub(self.n));
         self.b[self.n..self.n + take].copy_from_slice(&bytes[..take]);
         self.n += take;
+        if take < bytes.len() {
+            self.overflow = true;
+        }
         Ok(())
     }
 }
@@ -316,7 +341,7 @@ impl core::fmt::Write for Buf<'_> {
 fn build_request<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, auth: Option<&str>) -> &'a [u8] {
     use core::fmt::Write;
     let o = ip.octets();
-    let mut w = Buf { b: buf, n: 0 };
+    let mut w = Buf { b: buf, n: 0, overflow: false };
     let _ = write!(
         w,
         "GET {} HTTP/1.0\r\nHost: {}.{}.{}.{}\r\nUser-Agent: echoputer\r\nAccept: */*\r\n",
@@ -338,12 +363,18 @@ fn build_request<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, auth: Optio
 fn build_post<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, body: &str, key: Option<&str>) -> &'a [u8] {
     use core::fmt::Write;
     let o = ip.octets();
-    let mut w = Buf { b: buf, n: 0 };
+    let mut w = Buf { b: buf, n: 0, overflow: false };
     let _ = write!(w, "POST {} HTTP/1.0\r\nHost: {}.{}.{}.{}\r\nUser-Agent: echoputer\r\n", path, o[0], o[1], o[2], o[3]);
     if let Some(k) = key {
         let _ = write!(w, "X-Offload-Key: {k}\r\n");
     }
     let _ = write!(w, "Content-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+    // If anything didn't fit, the body got truncated while Content-Length still
+    // claims body.len() — sending that would hang/garble the server. Signal the
+    // caller (empty slice) instead of emitting a corrupt, too-large request.
+    if w.overflow {
+        return &[];
+    }
     let n = w.n;
     &buf[..n]
 }
