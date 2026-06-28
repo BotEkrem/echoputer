@@ -202,7 +202,6 @@ pub fn http_head(
 /// to pull a (possibly large) snapshot straight to SD without buffering it in RAM. `0`
 /// status = connect/send failure or unparsable head. The header phase reads only what
 /// fits the head buffer and leaves the rest queued, so no body bytes are dropped.
-#[cfg_attr(not(feature = "networktest"), allow(dead_code))]
 #[allow(clippy::too_many_arguments)]
 pub fn http_get_stream(
     iface: &mut Interface,
@@ -501,7 +500,6 @@ impl Dechunk {
 /// truncated request, or user abort) and the trimmed response body (`None` if empty).
 /// `tick() -> false` aborts the long synchronous-crack read wait. The caller maps
 /// the status (200 = passphrase body; 403/503 = the server's auth/busy errors).
-#[allow(dead_code)] // the device-side offload flow wires this (assoc -> post_body)
 #[allow(clippy::too_many_arguments)]
 pub fn post_body(
     iface: &mut Interface,
@@ -660,7 +658,6 @@ fn build_request<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, auth: Optio
 /// body is `&str` since a `.22000` line is ASCII. When `key` (the shared PSK) is set,
 /// the request is signed with `X-Offload-Sig: HMAC-SHA256(psk, body)` — the PSK itself
 /// is never put on the wire, so a sniffed request can't recover or reuse the secret.
-#[cfg_attr(not(feature = "networktest"), allow(dead_code))]
 fn build_post<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, body: &str, key: Option<&str>) -> &'a [u8] {
     use core::fmt::Write;
     let o = ip.octets();

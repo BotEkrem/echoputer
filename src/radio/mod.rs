@@ -709,7 +709,8 @@ impl Radio {
         Some(EAPOL_COUNT.load(Ordering::Relaxed))
     }
 
-    /// Capture a WPA 4-way handshake for `bssid`/`channel` (deauth-assisted) and
+    /// Capture a WPA 4-way handshake for `bssid`/`channel` (PASSIVE sniff — raw deauth
+    /// TX is rejected by this blob, so it waits for a client to (re)associate) and
     /// then crack it OFFLINE against the built-in weak-password list — fully
     /// self-contained, no SD / wordlist / server. `tick(n)` drives the UI (n =
     /// EAPOL count while capturing, candidate index while cracking) and aborts on

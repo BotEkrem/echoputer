@@ -68,9 +68,9 @@ impl CamHost {
             cred_len: 0,
         }
     }
-    /// The grabbed `Server:` banner. Used by the selftest dump + (later) build #4
-    /// brand-specific snapshot paths; the radar UI shows brand/cred instead.
-    #[allow(dead_code)]
+    /// The grabbed `Server:` banner — surfaced only by the `selftest` serial dump (the
+    /// radar UI shows brand/cred instead, and snapshot picks paths by brand).
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     pub fn server_str(&self) -> &str {
         core::str::from_utf8(&self.server[..self.server_len]).unwrap_or("")
     }

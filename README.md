@@ -89,9 +89,11 @@ Hacking is the security toolkit and has its own section below. The rest:
   (any key wakes it).
 - Charge is a full-screen battery gauge for leaving the device on the charger;
   the ADV only charges while it is powered on.
-- Settings holds the preferences, grouped into General, Synthwave and File
-  Browser, and writes them to `/ECHO/DATA/CONFIG.BIN`. With no card inserted
-  everything still works, the settings just don't persist across reboots.
+- Settings holds the preferences, grouped into General, Synthwave, File
+  Browser and Offload (the crack-offload server's IP/port/PSK + an uplink WiFi,
+  editable on-device or from the Web UI), and writes them to
+  `/ECHO/DATA/CONFIG.BIN` (offload config to `/OFFLOAD.CFG`). With no card
+  inserted everything still works, the settings just don't persist across reboots.
 - System is a read-only monitor: free/used heap, uptime, battery, MAC address
   and chip, refreshed once a second.
 
@@ -117,15 +119,17 @@ keeps going, with a live counter, until you press a key.
 | Basic | WiFi Analyzer | the same scan drawn as a 2.4 GHz channel-usage histogram |
 | Basic | BLE Scanner | nearby Bluetooth LE devices, drawn as a radar |
 | Basic | Deauth Detector | listens for deauth/disassoc frames, i.e. an attack in progress |
+| Basic | Wardrive | repeatedly scans WiFi (+ BLE) and logs every new device to SD as `WARDRIVE.CSV` (BSSID/SSID/RSSI/channel/encryption); no GPS, so it is a signal inventory, not a geo-track |
 | Intermediate | Beacon Spam | floods fake beacons so bogus networks fill the air |
 | Intermediate | Probe Flood | floods fake probe requests from phantom clients |
 | Intermediate | BLE Spam | pairing-popup and junk-name advertising spam |
 | Intermediate | Evil Twin | 2.4 GHz WPA2 rogue AP cloning a target SSID; captures a connecting client's EAPOL msg2 and cracks it offline — no deauth needed |
 | Advanced | Deauth Flood | would kick clients off a target AP, but is **non-functional on this ESP32 IDF blob** (it rejects raw deauth TX) — use Handshake Capture / Evil Twin instead |
 | Advanced | Handshake Capture | passively sniffs a WPA 4-way handshake on the target's channel, then cracks it offline |
+| Advanced | Active PMKID | associates to the target with a throwaway password to elicit the AP's EAPOL msg1, grabs the RSN PMKID off-air (clientless — no other client, no deauth), then cracks it offline + exports a `.22000` line |
 | Advanced | Evil Portal | open AP with DHCP/DNS hijack and a fake login page |
 | Advanced | LAN Scan | joins a network, gets a lease, port-scans the gateway |
-| Advanced | Camera Finder | concurrent /24 sweep that fingerprints IP cameras and tries default creds (HTTP Basic + Digest) |
+| Advanced | Camera Finder | concurrent /24 sweep that fingerprints IP cameras and tries default creds (HTTP Basic + Digest); on a cracked camera it grabs a proof-of-access JPEG snapshot to SD (`SNAP.JPG`) and opens a live PTZ control screen (best-effort, CGI brands like Dahua/Foscam-clones) |
 
 Beacon Spam and Probe Flood let you choose the SSID source in their settings: a
 random English set, a random Turkish set, or a custom prefix you type on the
@@ -146,17 +150,24 @@ candidate passphrases against a captured handshake, from a small built-in
 weak-password list plus an optional SD wordlist (`/WIFIPASS.TXT`). The ESP32's
 PBKDF2 is slow (a few guesses a second), so every capture is also written to the SD
 as a hashcat `.22000` line (`HS22000.TXT`) you can crack on a PC with
-`hashcat -m 22000`. One hard constraint shapes all of this: the closed IDF WiFi
-blob rejects raw deauthentication frames, so the capture paths never rely on a
-deauth — Handshake Capture waits for a client to (re)associate on its own, and Evil
-Twin lures the client onto its own 2.4 GHz AP (which also sidesteps 5 GHz, since the
-ESP32-S3 is 2.4 GHz only). Beacon and probe injection, by contrast, the blob allows.
+`hashcat -m 22000`. When the on-device list misses, the device can also offload the
+crack: it joins a configured uplink WiFi and POSTs the `.22000` to a small
+crack-server (`offload/`, std-only Rust wrapping `hashcat`), authenticated with an
+`X-Offload-Sig: HMAC-SHA256(PSK, body)` header so the shared secret never goes on the
+wire, then shows the recovered passphrase. One hard constraint shapes all of this:
+the closed IDF WiFi blob rejects raw deauthentication frames, so the capture paths
+never rely on a deauth — Handshake Capture waits for a client to (re)associate on its
+own, Active PMKID associates itself to elicit msg1, and Evil Twin lures the client
+onto its own 2.4 GHz AP (which also sidesteps 5 GHz, since the ESP32-S3 is 2.4 GHz
+only). Beacon and probe injection, by contrast, the blob allows.
 
 A separate self-test build (`cargo build --features selftest`) drives every tool
 once over the serial port at boot, which is how the radio paths get exercised
 without pressing keys. A second one (`--features networktest`) runs the no-radio
-crypto and parser vectors — HTTP/Digest/base64 and the WPA SHA1/HMAC/PBKDF2/PMK,
-EAPOL parse, wordlist crack, msg1 builder and `.22000` export — over serial, so the
+crypto and parser vectors — HTTP/Digest/base64/chunked, SHA-256 + HMAC-SHA256
+(NIST/RFC 4231) for the signed offload, the WPA SHA1/HMAC/PBKDF2/PMK, EAPOL + PMKID
+parse, wordlist crack, msg1 builder, `.22000` export, the camera snapshot/PTZ path
+maps, the wardrive CSV rows and the offload config round-trip — over serial, so the
 offline logic is validated without any WiFi.
 
 Some things are deliberately left out because they don't belong on a no_std

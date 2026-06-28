@@ -15,19 +15,37 @@ card and crack on any PC:
 hashcat -m 22000 HS22000.TXT rockyou.txt
 ```
 
-**2. Server (`crack-server/`).** A std-only Rust HTTP service that accepts the `.22000`
-line over HTTP and returns the recovered passphrase — the target of the firmware's
-`radio::http::build_post`. (The device-side *live* POST flow — associate to the server's
-network, POST, read the result — is not wired into the firmware yet; the server is ready
-and standalone-testable in the meantime.)
+**2. Server (`crack-server/`), live offload.** A std-only Rust HTTP service that accepts
+the `.22000` line and returns the recovered passphrase. The device-side flow is fully
+wired: configure the **Offload** server (IP/port/PSK + an uplink WiFi) in Settings or the
+Web UI, and when an on-device crack misses, the firmware auto-joins the uplink, POSTs the
+`.22000` signed with `X-Offload-Sig: HMAC-SHA256(PSK, body)` (the PSK never goes on the
+wire), and shows the passphrase the server recovers. Works for both 4-way (`WPA*02*`) and
+PMKID (`WPA*01*`) lines.
 
 ## Setup
+
+**Recommended — a server box on the lab LAN** (`server-install.sh`, shipped as a release
+asset): a `curl | sudo bash` one-liner that downloads the release binary, SHA256-verifies
+it, installs `hashcat` + a wordlist, **generates and prints a PSK**, and runs a hardened
+systemd service:
+
+```bash
+curl -fsSL <release>/server-install.sh | sudo bash
+```
+
+Put the printed **PSK** into the device's Offload settings (Settings or Web UI). With a
+PSK set the server binds the LAN and every request must carry a valid `X-Offload-Sig`
+HMAC over its body — a bad/missing signature gets a `403`. With no PSK it binds
+`127.0.0.1` only, so it can never be accidentally exposed unauthenticated.
+
+**Build from source instead:**
 
 ```bash
 cd offload
 ./offload-install.sh        # installs hashcat, pins the crate to your host target, builds it
 # then run (the installer prints the exact path):
-crack-server/target/<host-triple>/release/crack-server rockyou.txt 8080
+OFFLOAD_KEY=<psk> BIND=0.0.0.0 crack-server/target/<host-triple>/release/crack-server rockyou.txt 8080
 ```
 
 > The repo root pins Cargo to the **xtensa** target (for the firmware), so `crack-server`
@@ -41,15 +59,20 @@ crack-server/target/<host-triple>/release/crack-server rockyou.txt 8080
 ```
 POST /crack            (any path accepted)
 Content-Type: text/plain
-<body> = one .22000 line:  WPA*02*<mic>*<ap_mac>*<sta_mac>*<essid>*<anonce>*<eapol>*00
+X-Offload-Sig: <hex>   = HMAC-SHA256(PSK, body)   (required iff OFFLOAD_KEY is set)
+<body> = one .22000 line:  WPA*02*<mic>*<ap>*<sta>*<essid>*<anonce>*<eapol>*00
+                       (or WPA*01*<pmkid>*<ap>*<sta>*<essid>*** for a PMKID)
 
 200 OK, text/plain
 <body> = the passphrase   (empty body = not found in the wordlist)
+403/503               = bad/missing signature / server busy
 ```
 
-Test it without the device — pull `HS22000.TXT` off the SD and:
+Test it without the device (signing the body the way the firmware does):
 
 ```bash
-curl -s --data-binary @HS22000.TXT http://localhost:8080/crack ; echo
+BODY=$(tr -d '\r\n' < HS22000.TXT)
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$PSK" | sed 's/^.*= //')
+curl -s -H "X-Offload-Sig: $SIG" --data-binary "$BODY" http://localhost:8080/crack ; echo
 ```
 

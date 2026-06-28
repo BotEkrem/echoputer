@@ -9,9 +9,9 @@
 //! Pure (no deps beyond alloc); verified by `networktest` against RFC 6070 +
 //! the 802.11i PMK test vector.
 //!
-//! (Primitives are pub for the upcoming capture+crack step; `allow(dead_code)`
-//! until that wires them into the normal build.)
-#![allow(dead_code)]
+//! Some crypto primitives are `pub` building blocks exercised mainly by `networktest`;
+//! the few that aren't reachable in a plain build keep a local `allow(dead_code)`.
+#![cfg_attr(not(feature = "networktest"), allow(dead_code))]
 
 use alloc::string::String;
 use alloc::vec::Vec;

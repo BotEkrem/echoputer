@@ -1677,8 +1677,8 @@ impl Hacking {
     }
 
     fn draw_failed<D: DrawTarget<Color = Rgb565>>(&self, d: &mut D) {
-        // the SPECIFIC reason if one was set, else the generic label
-        let msg = self.fail_msg.unwrap_or_else(|| i18n::t(hacking::RADIO_ERROR));
+        // the SPECIFIC reason if one was set (localized), else the generic label
+        let msg = self.fail_msg.map(fail_label).unwrap_or_else(|| i18n::t(hacking::RADIO_ERROR));
         // BODY_FONT (not TITLE) so longer reason strings fit the 240px width
         theme::text_center(d, msg, theme::W / 2, theme::H / 2 - 6, theme::BODY_FONT, theme::DESTRUCTIVE);
         theme::text_center(d, i18n::t(hacking::ENTER_TO_RETRY), theme::W / 2, theme::H / 2 + 10, theme::BODY_FONT, theme::MUTED);
@@ -1933,6 +1933,30 @@ pub fn draw_wardrive<D: DrawTarget<Color = Rgb565>>(d: &mut D, st: &crate::radio
     theme::text_center(d, &alloc::format!("{} {}", st.rounds, i18n::t(hacking::ROUNDS)), theme::W / 2, 78, theme::BODY_FONT, theme::MUTED);
     theme::text_center(d, "-> WARDRIVE.CSV", theme::W / 2, 96, theme::BODY_FONT, theme::accent());
     theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
+}
+
+/// Map a radio-layer failure code to a localized message for the failure screen; an
+/// unmapped code falls through to its own English text (safe default for new codes).
+fn fail_label(code: &'static str) -> &'static str {
+    match code {
+        "radio busy" => i18n::t(hacking::F_RADIO_BUSY),
+        "offload: no crack" => i18n::t(hacking::F_NO_CRACK),
+        "aborted" => i18n::t(hacking::F_ABORTED),
+        "offload: bad PSK" => i18n::t(hacking::F_BAD_PSK),
+        "offload: no reply" => i18n::t(hacking::F_NO_REPLY),
+        "offload: server busy" => i18n::t(hacking::F_SRV_BUSY),
+        "offload: server error" => i18n::t(hacking::F_SRV_ERR),
+        "no DHCP lease on uplink" => i18n::t(hacking::F_NO_UPLINK_DHCP),
+        "offload aborted" => i18n::t(hacking::F_OFF_ABORTED),
+        "wifi locked (weak-list dry)" => i18n::t(hacking::F_WEAKLIST_DRY),
+        "assoc fail (open AP?)" => i18n::t(hacking::F_ASSOC_OPEN),
+        "assoc fail (wrong pass?)" => i18n::t(hacking::F_ASSOC_PASS),
+        "no lease" => i18n::t(hacking::F_NO_LEASE),
+        "no gateway" => i18n::t(hacking::F_NO_GATEWAY),
+        "server IP must be a.b.c.d" => i18n::t(hacking::F_BAD_IP),
+        "no iface" => i18n::t(hacking::F_NO_IFACE),
+        other => other,
+    }
 }
 
 // ---- list navigation helpers (skip the difficulty headers) ----

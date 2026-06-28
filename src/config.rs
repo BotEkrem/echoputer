@@ -151,7 +151,6 @@ pub struct OffloadCfg {
     pub uplink_pass_len: usize,
 }
 
-#[allow(dead_code)] // load/save consumed by the Settings UI + Web UI + offload flow (wired next)
 impl OffloadCfg {
     pub const fn new() -> Self {
         Self {

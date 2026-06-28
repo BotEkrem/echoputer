@@ -111,6 +111,24 @@ pub const ATTACK_RUNNING: Msg = ["ATTACK RUNNING", "SALDIRI CALISIYOR"];
 pub const ANY_KEY_TO_STOP: Msg = ["any key to stop", "durdurmak icin tus"];
 pub const WARDRIVE: Msg = ["Wardrive Log", "Wardrive Log"];
 pub const PMKID_ACTIVE: Msg = ["PMKID Active", "PMKID Aktif"];
+// localized failure-screen messages (mapped from the radio layer's raw &str codes by
+// hacking::fail_label; an unmapped code falls through to its English string).
+pub const F_RADIO_BUSY: Msg = ["radio busy", "radyo mesgul"];
+pub const F_NO_CRACK: Msg = ["offload: not cracked", "offload: kirilmadi"];
+pub const F_ABORTED: Msg = ["aborted", "iptal edildi"];
+pub const F_BAD_PSK: Msg = ["offload: bad PSK", "offload: hatali PSK"];
+pub const F_NO_REPLY: Msg = ["offload: no reply", "offload: yanit yok"];
+pub const F_SRV_BUSY: Msg = ["offload: server busy", "offload: sunucu mesgul"];
+pub const F_SRV_ERR: Msg = ["offload: server error", "offload: sunucu hatasi"];
+pub const F_NO_UPLINK_DHCP: Msg = ["no DHCP on uplink", "uplink'te DHCP yok"];
+pub const F_OFF_ABORTED: Msg = ["offload aborted", "offload iptal"];
+pub const F_WEAKLIST_DRY: Msg = ["wifi locked (list dry)", "wifi kilitli (liste bitti)"];
+pub const F_ASSOC_OPEN: Msg = ["assoc fail (open AP?)", "baglanti hatasi (acik AP?)"];
+pub const F_ASSOC_PASS: Msg = ["assoc fail (wrong pass?)", "baglanti hatasi (yanlis sifre?)"];
+pub const F_NO_LEASE: Msg = ["no DHCP lease", "DHCP alinamadi"];
+pub const F_NO_GATEWAY: Msg = ["no gateway", "ag gecidi yok"];
+pub const F_BAD_IP: Msg = ["server IP must be a.b.c.d", "sunucu IP a.b.c.d olmali"];
+pub const F_NO_IFACE: Msg = ["no interface", "arayuz yok"];
 pub const ROUNDS: Msg = ["rounds", "tur"];
 pub const NO_SD: Msg = ["no SD card", "SD kart yok"];
 
