@@ -113,18 +113,19 @@ keeps going, with a live counter, until you press a key.
 
 | Tier | Tool | What it does |
 |------|------|--------------|
-| Basic | WiFi Scanner | lists nearby access points with signal, channel and encryption |
+| Basic | WiFi Scanner | nearby access points (signal, channel, encryption), drawn as a radar |
 | Basic | WiFi Analyzer | the same scan drawn as a 2.4 GHz channel-usage histogram |
-| Basic | BLE Scanner | lists nearby Bluetooth LE devices |
+| Basic | BLE Scanner | nearby Bluetooth LE devices, drawn as a radar |
 | Basic | Deauth Detector | listens for deauth/disassoc frames, i.e. an attack in progress |
 | Intermediate | Beacon Spam | floods fake beacons so bogus networks fill the air |
 | Intermediate | Probe Flood | floods fake probe requests from phantom clients |
 | Intermediate | BLE Spam | pairing-popup and junk-name advertising spam |
-| Intermediate | Evil Twin | clones a real AP's SSID on its channel as a lure |
-| Advanced | Deauth Flood | kicks every client off a target AP |
-| Advanced | Handshake Capture | deauths a target, then sniffs the WPA handshake |
+| Intermediate | Evil Twin | 2.4 GHz WPA2 rogue AP cloning a target SSID; captures a connecting client's EAPOL msg2 and cracks it offline — no deauth needed |
+| Advanced | Deauth Flood | would kick clients off a target AP, but is **non-functional on this ESP32 IDF blob** (it rejects raw deauth TX) — use Handshake Capture / Evil Twin instead |
+| Advanced | Handshake Capture | passively sniffs a WPA 4-way handshake on the target's channel, then cracks it offline |
 | Advanced | Evil Portal | open AP with DHCP/DNS hijack and a fake login page |
-| Advanced | LAN Scan | joins an open network, gets a lease, port-scans the gateway |
+| Advanced | LAN Scan | joins a network, gets a lease, port-scans the gateway |
+| Advanced | Camera Finder | concurrent /24 sweep that fingerprints IP cameras and tries default creds (HTTP Basic + Digest) |
 
 Beacon Spam and Probe Flood let you choose the SSID source in their settings: a
 random English set, a random Turkish set, or a custom prefix you type on the
@@ -139,9 +140,24 @@ hand. WiFi and BLE come up one at a time and the active one is torn down before
 the other starts; running both alongside the framebuffer does not fit in the S3's
 RAM, which showed up early on as a boot-time stack panic.
 
+WPA cracking is on-device and self-contained: SHA-1 / HMAC-SHA1 / PBKDF2 derive the
+PMK and PTK and verify the EAPOL MIC — the same math hashcat does — to test
+candidate passphrases against a captured handshake, from a small built-in
+weak-password list plus an optional SD wordlist (`/WIFIPASS.TXT`). The ESP32's
+PBKDF2 is slow (a few guesses a second), so every capture is also written to the SD
+as a hashcat `.22000` line (`HS22000.TXT`) you can crack on a PC with
+`hashcat -m 22000`. One hard constraint shapes all of this: the closed IDF WiFi
+blob rejects raw deauthentication frames, so the capture paths never rely on a
+deauth — Handshake Capture waits for a client to (re)associate on its own, and Evil
+Twin lures the client onto its own 2.4 GHz AP (which also sidesteps 5 GHz, since the
+ESP32-S3 is 2.4 GHz only). Beacon and probe injection, by contrast, the blob allows.
+
 A separate self-test build (`cargo build --features selftest`) drives every tool
 once over the serial port at boot, which is how the radio paths get exercised
-without pressing keys.
+without pressing keys. A second one (`--features networktest`) runs the no-radio
+crypto and parser vectors — HTTP/Digest/base64 and the WPA SHA1/HMAC/PBKDF2/PMK,
+EAPOL parse, wordlist crack, msg1 builder and `.22000` export — over serial, so the
+offline logic is validated without any WiFi.
 
 Some things are deliberately left out because they don't belong on a no_std
 Cardputer: SSH (no no_std crypto stack to lean on), the assorted host-protocol
@@ -207,6 +223,7 @@ reserves the RAM the boot stack needs.
 | `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. |
 | `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
 | `selftest` | boot-time serial self-test of every radio tool. |
+| `networktest` | boot-time serial self-test of the no-radio crypto/parser vectors (HTTP/Digest/base64, WPA SHA1/HMAC/PBKDF2/PMK + EAPOL parse + wordlist crack + `.22000` export). |
 | `audiodiag` | logs I2S audio health (throughput, underruns) over serial once a second, for debugging the audio path. |
 
 Combine them as you like — `cargo build --release --features emugbc,player` is the
@@ -242,6 +259,10 @@ src/
     portal        the evil/captive portal (smoltcp + DHCP/DNS/HTTP)
     netscan       the LAN scanner
     webui         the Web UI station dashboard (smoltcp HTTP + SD file mgmt)
+    http          HTTP/1.0 client (status/Server/realm parse, GET + POST builder)
+    digest        MD5 + HTTP Digest auth (RFC 2617)
+    camscan       Camera Finder: concurrent /24 sweep, fingerprint, default creds
+    wpa           WPA crack: SHA1/HMAC/PBKDF2/PMK/PTK/MIC, EAPOL parse, .22000 export
 
   apps/         the home screen and the apps
     menu, splash, repl, games (snake, g2048, tetris, pong), stopwatch, notes,
