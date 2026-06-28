@@ -257,3 +257,21 @@ jobs:
             echo "Pruning old release: $tag"
             gh release delete "$tag" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY"
           done
+
+      - name: Prune dangling tags (no backing release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Keep the tag set in sync with the release set. A history rewrite (or a release
+          # pruned back when `--cleanup-tag` didn't yet exist) can strand tags that no
+          # longer have a release; drop those so the Tags page mirrors the Releases page.
+          # SAFETY: bail if the release list comes back empty (API hiccup) so we never
+          # wipe every tag.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' | sort > /tmp/rel_tags
+          [ -s /tmp/rel_tags ] || { echo "no releases listed — skipping tag prune"; exit 0; }
+          git ls-remote --tags origin 2>/dev/null | sed 's#.*refs/tags/##; s/\^{}//' | sort -u > /tmp/all_tags
+          comm -23 /tmp/all_tags /tmp/rel_tags | while read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "Pruning dangling tag (no release): $tag"
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" 2>/dev/null || true
+          done
