@@ -1,0 +1,6 @@
+# downloaded wordlists — don't commit these (large)
+rockyou.txt
+*.txt.gz
+
+# Rust build artifacts for the host crack-server
+crack-server/target/

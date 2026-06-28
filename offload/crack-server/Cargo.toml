@@ -1,0 +1,13 @@
+[package]
+name = "echoputer-crack-server"
+version = "0.1.0"
+edition = "2021"
+description = "Host-side WPA crack-offload server for the Echoputer firmware (runs hashcat over HTTP)"
+license = "MIT"
+
+[[bin]]
+name = "crack-server"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2

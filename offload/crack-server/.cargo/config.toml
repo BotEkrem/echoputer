@@ -1,0 +1,9 @@
+# This is a HOST tool, not firmware. The repo-root .cargo/config forces the
+# xtensa-esp32s3-none-elf target + a no_std build-std; override here so it builds a
+# normal host binary. (Cargo merges configs: a closer `build.target` wins; arrays like
+# `build-std` are JOINED, so we add "std" rather than try to unset core/alloc.)
+[build]
+target = "aarch64-apple-darwin"   # this machine; change for a non-arm-Mac host
+
+[unstable]
+build-std = ["std", "panic_unwind"]
