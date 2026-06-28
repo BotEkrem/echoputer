@@ -185,8 +185,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Check out (for offload/server-install.sh)
+      - name: Check out (full history — for offload/server-install.sh + the orphan-release prune)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Download the built artifacts (.bin variants + crack-server)
         uses: actions/download-artifact@v4
         with:
@@ -215,6 +217,30 @@ jobs:
             --title "Build #$GITHUB_RUN_NUMBER ($SHORT) — $(date -u +%Y-%m-%d)" \
             --latest \
             --notes "Build of commit \`$SHORT\`. **Firmware:** grab the \`.bin\` for the features you want (see the README's *Cargo features* table) — install from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`. **WPA crack-offload server (optional):** on an Ubuntu box run \`curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/server-install.sh | sudo bash\` — installs hashcat + the static \`crack-server\`, generates a PSK, and runs it as a hardened systemd service. **Auth:** every request is signed with \`X-Offload-Sig: HMAC-SHA256(PSK, body)\` (the PSK never crosses the wire), the server binds \`127.0.0.1\`-only unless a key is set, and the installer SHA256-verifies the binary before installing it as root. Still plain HTTP, so keep it on a trusted LAN / behind a firewall."
+
+      - name: Prune orphaned releases (tag commit no longer in history)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # After a history rewrite (filter-repo + force-push) the old per-commit release
+          # tags point at commits that no longer exist on this branch. Drop any release
+          # whose tagged commit is gone from the current history. CONSERVATIVE: delete only
+          # when we POSITIVELY confirm the commit is absent — skip on any lookup hiccup, so
+          # a flaky API never nukes a still-valid release.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName \
+            --jq '.[].tagName' |
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null)" || sha=""
+            [ -n "$sha" ] || { echo "skip $tag (no resolvable tag ref)"; continue; }
+            if commit="$(git rev-parse -q --verify "${sha}^{commit}" 2>/dev/null)" \
+               && git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then
+              : # the tagged commit is still in this branch's history — keep it
+            else
+              echo "Pruning orphaned release: $tag (commit ${sha:0:7} not in history)"
+              gh release delete "$tag" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY"
+            fi
+          done
 
       - name: Prune old releases (keep the newest 10)
         env:
