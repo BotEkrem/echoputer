@@ -1449,9 +1449,9 @@ impl Hacking {
         theme::text(d, &alloc::format!("{}/{}", sel + 1, self.ap_count), PANEL_X, 80, theme::BODY_FONT, theme::MUTED);
         // legend
         theme::disc(d, PANEL_X + 2, 99, 2, RADAR_GREEN);
-        theme::text(d, "open", PANEL_X + 8, 95, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(hacking::LEGEND_OPEN), PANEL_X + 8, 95, theme::BODY_FONT, theme::MUTED);
         theme::disc(d, PANEL_X + 2, 110, 1, theme::MUTED);
-        theme::text(d, "wpa", PANEL_X + 8, 106, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(hacking::LEGEND_WPA), PANEL_X + 8, 106, theme::BODY_FONT, theme::MUTED);
 
         if select {
             let h = alloc::format!("{}   {} {}   ESC", i18n::t(hacking::MOVE), i18n::t(hacking::ENTER), self.pending.target_verb());
@@ -1561,9 +1561,9 @@ impl Hacking {
         theme::text(d, &alloc::format!("{}/{}", sel + 1, self.ble_count), PANEL_X, 80, theme::BODY_FONT, theme::MUTED);
         // legend
         theme::disc(d, PANEL_X + 2, 99, 2, RADAR_GREEN);
-        theme::text(d, "named", PANEL_X + 8, 95, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(hacking::LEGEND_NAMED), PANEL_X + 8, 95, theme::BODY_FONT, theme::MUTED);
         theme::disc(d, PANEL_X + 2, 110, 1, theme::MUTED);
-        theme::text(d, "anon", PANEL_X + 8, 106, theme::BODY_FONT, theme::MUTED);
+        theme::text(d, i18n::t(hacking::LEGEND_ANON), PANEL_X + 8, 106, theme::BODY_FONT, theme::MUTED);
 
         let hint = alloc::format!("{}   {} {}   ENTER {}   ESC", i18n::t(hacking::MOVE), self.ble_count, i18n::t(hacking::DEV), i18n::t(hacking::RESCAN));
         theme::hint(d, &hint);

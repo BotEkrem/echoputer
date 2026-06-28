@@ -160,6 +160,10 @@ fn clamp_scroll(sel: usize, scroll: usize, visible: usize) -> usize {
     }
 }
 
+// The `irtest` gate runs an IR diagnostic loop at boot and never reaches the normal
+// app, so a few setup vars (led/ir_tx) go unused and the app body is unreachable in
+// that build only — keep the gate warning-clean without affecting the real firmware.
+#[cfg_attr(feature = "irtest", allow(unreachable_code, unused_variables, unused_assignments))]
 #[main]
 fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));

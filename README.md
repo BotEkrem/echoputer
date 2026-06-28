@@ -150,16 +150,26 @@ candidate passphrases against a captured handshake, from a small built-in
 weak-password list plus an optional SD wordlist (`/WIFIPASS.TXT`). The ESP32's
 PBKDF2 is slow (a few guesses a second), so every capture is also written to the SD
 as a hashcat `.22000` line (`HS22000.TXT`) you can crack on a PC with
-`hashcat -m 22000`. When the on-device list misses, the device can also offload the
-crack: it joins a configured uplink WiFi and POSTs the `.22000` to a small
-crack-server (`offload/`, std-only Rust wrapping `hashcat`), authenticated with an
-`X-Offload-Sig: HMAC-SHA256(PSK, body)` header so the shared secret never goes on the
-wire, then shows the recovered passphrase. One hard constraint shapes all of this:
+`hashcat -m 22000`. One hard constraint shapes all of this:
 the closed IDF WiFi blob rejects raw deauthentication frames, so the capture paths
 never rely on a deauth — Handshake Capture waits for a client to (re)associate on its
 own, Active PMKID associates itself to elicit msg1, and Evil Twin lures the client
 onto its own 2.4 GHz AP (which also sidesteps 5 GHz, since the ESP32-S3 is 2.4 GHz
 only). Beacon and probe injection, by contrast, the blob allows.
+
+### Compute offload
+
+When the on-device list misses, the device can offload the crack instead of giving up.
+Configure a crack-server — its IP/port, a shared PSK, and an uplink WiFi — in Settings
+or the Web UI; after a missed capture the firmware joins that uplink and POSTs the
+`.22000` to the server, which runs `hashcat` against a real wordlist and returns the
+passphrase. The request is signed with an `X-Offload-Sig: HMAC-SHA256(PSK, body)`
+header, so the shared secret never travels on the wire (a sniffer sees only a
+per-body signature, not the PSK). Both PMKID (`WPA*01*`) and 4-way (`WPA*02*`) lines
+work. The server is std-only Rust with no crates (`offload/crack-server`), binds
+localhost-only until a PSK is set, runs as a hardened systemd service, and installs
+with one `curl … | sudo bash` (`server-install.sh`, which SHA256-verifies the binary
+first). It is still plain HTTP, so keep it on a trusted LAN — see `offload/README.md`.
 
 A separate self-test build (`cargo build --features selftest`) drives every tool
 once over the serial port at boot, which is how the radio paths get exercised

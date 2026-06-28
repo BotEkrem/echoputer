@@ -16,6 +16,11 @@
 //! and is what real remotes use for RC5 too (a captured Grundig RC5 frame is 38 kHz); close enough
 //! for RC5/RC6 (36 kHz) and Sony (40 kHz) receivers at handheld range.
 
+// The `irtest` diagnostic build drives IR through its own boot path and leaves the
+// normal TX builders (CLK_DIV/carrier consts, tx_config, IrTx::new) unused — silence
+// that here so the gate stays warning-clean without touching the normal build.
+#![cfg_attr(feature = "irtest", allow(dead_code))]
+
 use esp_hal::gpio::Level;
 use esp_hal::rmt::{Channel, PulseCode, Tx, TxChannelConfig};
 use esp_hal::time::{Duration, Instant};
