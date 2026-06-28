@@ -71,6 +71,7 @@ pub enum Tool {
     WifiAnalyze,
     BleScan,
     Detector,
+    Wardrive,
     // Intermediate (active noise / lure)
     BeaconSpam,
     ProbeFlood,
@@ -79,6 +80,7 @@ pub enum Tool {
     // Advanced (disruptive / capture / intrusion)
     Deauth,
     Handshake,
+    Pmkid,
     EvilPortal,
     NetScan,
     CamScan,
@@ -119,21 +121,23 @@ impl Tool {
             Tool::ProbeFlood => i18n::t(hacking::PROBE_FLOOD),
             Tool::EvilTwin => i18n::t(hacking::EVIL_TWIN),
             Tool::Handshake => i18n::t(hacking::HANDSHAKE_CAPTURE),
+            Tool::Pmkid => i18n::t(hacking::PMKID_ACTIVE),
             Tool::EvilPortal => i18n::t(hacking::EVIL_PORTAL),
             Tool::NetScan => i18n::t(hacking::LAN_SCAN),
             Tool::CamScan => i18n::t(hacking::CAM_FINDER),
             Tool::BleSpam => i18n::t(hacking::BLE_SPAM),
+            Tool::Wardrive => i18n::t(hacking::WARDRIVE),
         }
     }
     fn difficulty(self) -> Diff {
         match self {
-            Tool::WifiScan | Tool::WifiAnalyze | Tool::BleScan | Tool::Detector => Diff::Basic,
+            Tool::WifiScan | Tool::WifiAnalyze | Tool::BleScan | Tool::Detector | Tool::Wardrive => Diff::Basic,
             Tool::BeaconSpam | Tool::ProbeFlood | Tool::BleSpam | Tool::EvilTwin => Diff::Inter,
-            Tool::Deauth | Tool::Handshake | Tool::EvilPortal | Tool::NetScan | Tool::CamScan => Diff::Adv,
+            Tool::Deauth | Tool::Handshake | Tool::Pmkid | Tool::EvilPortal | Tool::NetScan | Tool::CamScan => Diff::Adv,
         }
     }
     fn offensive(self) -> bool {
-        !matches!(self, Tool::WifiScan | Tool::WifiAnalyze | Tool::BleScan | Tool::Detector)
+        !matches!(self, Tool::WifiScan | Tool::WifiAnalyze | Tool::BleScan | Tool::Detector | Tool::Wardrive)
     }
     fn has_settings(self) -> bool {
         matches!(self, Tool::BeaconSpam | Tool::ProbeFlood | Tool::BleSpam | Tool::EvilPortal)
@@ -141,7 +145,7 @@ impl Tool {
     fn target_title(self) -> &'static str {
         match self {
             Tool::EvilTwin => i18n::t(hacking::EVIL_TWIN_PICK_AP),
-            Tool::Handshake => i18n::t(hacking::HANDSHAKE_PICK_AP),
+            Tool::Handshake | Tool::Pmkid => i18n::t(hacking::HANDSHAKE_PICK_AP),
             Tool::NetScan => i18n::t(hacking::LAN_SCAN_PICK_AP),
             Tool::CamScan => i18n::t(hacking::CAM_FINDER_PICK_AP),
             _ => i18n::t(hacking::DEAUTH_PICK_TARGET),
@@ -150,7 +154,7 @@ impl Tool {
     fn target_verb(self) -> &'static str {
         match self {
             Tool::EvilTwin => i18n::t(hacking::CLONE),
-            Tool::Handshake => i18n::t(hacking::CAPTURE_VERB),
+            Tool::Handshake | Tool::Pmkid => i18n::t(hacking::CAPTURE_VERB),
             Tool::NetScan | Tool::CamScan => i18n::t(hacking::SCAN_VERB),
             _ => i18n::t(hacking::DEAUTH_VERB),
         }
@@ -162,12 +166,13 @@ enum LRow {
     Head(Diff),
     Tool(Tool),
 }
-const LIST: [LRow; 16] = [
+const LIST: [LRow; 18] = [
     LRow::Head(Diff::Basic),
     LRow::Tool(Tool::WifiScan),
     LRow::Tool(Tool::WifiAnalyze),
     LRow::Tool(Tool::BleScan),
     LRow::Tool(Tool::Detector),
+    LRow::Tool(Tool::Wardrive),
     LRow::Head(Diff::Inter),
     LRow::Tool(Tool::BeaconSpam),
     LRow::Tool(Tool::ProbeFlood),
@@ -176,6 +181,7 @@ const LIST: [LRow; 16] = [
     LRow::Head(Diff::Adv),
     LRow::Tool(Tool::Deauth),
     LRow::Tool(Tool::Handshake),
+    LRow::Tool(Tool::Pmkid),
     LRow::Tool(Tool::EvilPortal),
     LRow::Tool(Tool::NetScan),
     LRow::Tool(Tool::CamScan),
@@ -291,6 +297,8 @@ pub enum Action {
     NetScan,
     CamScan,
     CamCtl,
+    Wardrive,
+    Pmkid,
     Portal,
     BleSpam(ble_spam::Mode),
 }
@@ -380,6 +388,8 @@ pub struct Hacking {
     cam_wifi_len: usize,
     cam_ssid: [u8; 32], // the network to re-join for control (stashed at scan time)
     cam_ssid_len: usize,
+    wd_ble: u32,  // BLE devices logged by the last Wardrive (AP count is attack_sent)
+    wd_sd: bool,  // the last Wardrive had a writable SD card
 }
 
 impl Hacking {
@@ -420,6 +430,8 @@ impl Hacking {
             cam_wifi_len: 0,
             cam_ssid: [0; 32],
             cam_ssid_len: 0,
+            wd_ble: 0,
+            wd_sd: false,
         }
     }
 
@@ -651,7 +663,8 @@ impl Hacking {
             Tool::WifiScan | Tool::WifiAnalyze | Tool::BleScan | Tool::Detector
             | Tool::BeaconSpam | Tool::ProbeFlood => Action::Run(tool),
             Tool::BleSpam => Action::BleSpam(self.ble_mode()),
-            Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::NetScan | Tool::CamScan => Action::ScanTargets,
+            Tool::Wardrive => Action::Wardrive,
+            Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::Pmkid | Tool::NetScan | Tool::CamScan => Action::ScanTargets,
             Tool::EvilPortal => Action::Portal,
         }
     }
@@ -845,6 +858,7 @@ impl Hacking {
                 match self.pending {
                     Tool::EvilTwin => Action::EvilTwin,
                     Tool::Handshake => Action::Handshake,
+                    Tool::Pmkid => Action::Pmkid,
                     // Camera Finder / LAN Scan JOIN the network -> if it's secured,
                     // ask for the password (ENTER = join with it, TAB = attack/crack).
                     Tool::NetScan | Tool::CamScan => {
@@ -909,7 +923,7 @@ impl Hacking {
         }
         match rc {
             crate::K_ENTER => match self.pending {
-                Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::NetScan | Tool::CamScan => Action::ScanTargets,
+                Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::Pmkid | Tool::NetScan | Tool::CamScan => Action::ScanTargets,
                 Tool::EvilPortal => Action::Portal,
                 Tool::BleSpam => Action::BleSpam(self.ble_mode()),
                 other => Action::Run(other),
@@ -1123,6 +1137,17 @@ impl Hacking {
     /// Repaint the current view — used to return to the Done screen after the
     /// interactive camera-control sub-mode exits.
     pub fn redraw<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
+        self.draw(d, true);
+    }
+
+    /// Wardrive result intake: APs + BLE logged + whether the SD was writable.
+    pub fn show_wardrive_done<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D, st: &crate::radio::wardrive::WardriveState) {
+        self.attack_sent = st.aps;
+        self.wd_ble = st.ble;
+        self.wd_sd = st.got_file;
+        self.scan_failed = false;
+        self.fail_msg = None;
+        self.view = View::Done;
         self.draw(d, true);
     }
 
@@ -1588,7 +1613,7 @@ impl Hacking {
             self.draw_failed(d);
             return;
         }
-        if matches!(self.pending, Tool::Handshake | Tool::EvilTwin) {
+        if matches!(self.pending, Tool::Handshake | Tool::EvilTwin | Tool::Pmkid) {
             if self.wifi_pass_len > 0 {
                 // cracked: show the recovered passphrase
                 theme::text_center(d, i18n::t(hacking::WIFI_CRACKED), theme::W / 2, 36, theme::TITLE_FONT, RADAR_GREEN);
@@ -1623,6 +1648,14 @@ impl Hacking {
             }
             if self.cam_has {
                 theme::text_center(d, i18n::t(hacking::CAM_CONTROL_HINT), theme::W / 2, 100, theme::BODY_FONT, theme::accent());
+            }
+        } else if matches!(self.pending, Tool::Wardrive) {
+            if self.wd_sd {
+                theme::text_center(d, i18n::t(hacking::SCAN_DONE), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
+                theme::text_center(d, &alloc::format!("{} AP / {} BLE", self.attack_sent, self.wd_ble), theme::W / 2, 62, theme::BODY_FONT, theme::FG);
+                theme::text_center(d, "-> WARDRIVE.CSV", theme::W / 2, 80, theme::BODY_FONT, RADAR_GREEN);
+            } else {
+                theme::text_center(d, i18n::t(hacking::NO_SD), theme::W / 2, 48, theme::TITLE_FONT, theme::DESTRUCTIVE);
             }
         } else if matches!(self.pending, Tool::Deauth) {
             // raw deauth TX is rejected by this ESP IDF blob -> attack_sent stays 0; be honest.
@@ -1884,6 +1917,22 @@ pub fn draw_camctl<D: DrawTarget<Color = Rgb565>>(d: &mut D, ctl: &camscan::CamC
         theme::text_center(d, phase, theme::W / 2, 104, theme::BODY_FONT, theme::accent());
     }
     theme::hint(d, i18n::t(hacking::CAM_CTL_HINT));
+}
+
+/// Wardriving live screen: AP/BLE tallies + scan rounds, logging to SD.
+pub fn draw_wardrive<D: DrawTarget<Color = Rgb565>>(d: &mut D, st: &crate::radio::wardrive::WardriveState) {
+    theme::topbar(d, Tool::Wardrive.name());
+    theme::fill(d, 0, 20, theme::W as u32, (theme::HINT_Y - 22) as u32, theme::BG);
+    if !st.got_file {
+        theme::text_center(d, i18n::t(hacking::NO_SD), theme::W / 2, theme::H / 2, theme::BODY_FONT, theme::DESTRUCTIVE);
+        theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
+        return;
+    }
+    theme::text_center(d, &alloc::format!("{} AP", st.aps), theme::W / 2, 36, theme::TITLE_FONT, RADAR_GREEN);
+    theme::text_center(d, &alloc::format!("{} BLE", st.ble), theme::W / 2, 60, theme::BODY_FONT, theme::FG);
+    theme::text_center(d, &alloc::format!("{} {}", st.rounds, i18n::t(hacking::ROUNDS)), theme::W / 2, 78, theme::BODY_FONT, theme::MUTED);
+    theme::text_center(d, "-> WARDRIVE.CSV", theme::W / 2, 96, theme::BODY_FONT, theme::accent());
+    theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
 }
 
 // ---- list navigation helpers (skip the difficulty headers) ----

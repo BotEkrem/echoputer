@@ -109,6 +109,10 @@ pub const ENTER_RETRY_BACK: Msg = ["ENTER retry   ESC back", "ENTER tekrar   ESC
 
 pub const ATTACK_RUNNING: Msg = ["ATTACK RUNNING", "SALDIRI CALISIYOR"];
 pub const ANY_KEY_TO_STOP: Msg = ["any key to stop", "durdurmak icin tus"];
+pub const WARDRIVE: Msg = ["Wardrive Log", "Wardrive Log"];
+pub const PMKID_ACTIVE: Msg = ["PMKID Active", "PMKID Aktif"];
+pub const ROUNDS: Msg = ["rounds", "tur"];
+pub const NO_SD: Msg = ["no SD card", "SD kart yok"];
 
 pub const CAPTURED: Msg = ["captured", "yakalanan"];
 pub const PHASE: Msg = ["phase", "asama"];

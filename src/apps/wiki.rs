@@ -22,5 +22,7 @@ pub fn get(t: Tool) -> &'static str {
         Tool::EvilPortal => i18n::t(wiki::PORTAL),
         Tool::NetScan => i18n::t(wiki::NETSCAN),
         Tool::CamScan => i18n::t(wiki::CAMSCAN),
+        Tool::Wardrive => i18n::t(wiki::WARDRIVE),
+        Tool::Pmkid => i18n::t(wiki::PMKID),
     }
 }

