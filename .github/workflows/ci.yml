@@ -214,7 +214,7 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "Build #$GITHUB_RUN_NUMBER ($SHORT) — $(date -u +%Y-%m-%d)" \
             --latest \
-            --notes "Build of commit \`$SHORT\`. **Firmware:** grab the \`.bin\` for the features you want (see the README's *Cargo features* table) — install from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`. **WPA crack-offload server (optional):** on an Ubuntu box run \`curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/server-install.sh | sudo bash\` — installs hashcat + the static \`crack-server\`. LAN / firewall only; no auth yet."
+            --notes "Build of commit \`$SHORT\`. **Firmware:** grab the \`.bin\` for the features you want (see the README's *Cargo features* table) — install from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`. **WPA crack-offload server (optional):** on an Ubuntu box run \`curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/server-install.sh | sudo bash\` — installs hashcat + the static \`crack-server\`, generates a PSK, and runs it as a hardened systemd service. **Auth:** every request is signed with \`X-Offload-Sig: HMAC-SHA256(PSK, body)\` (the PSK never crosses the wire), the server binds \`127.0.0.1\`-only unless a key is set, and the installer SHA256-verifies the binary before installing it as root. Still plain HTTP, so keep it on a trusted LAN / behind a firewall."
 
       - name: Prune old releases (keep the newest 10)
         env:
