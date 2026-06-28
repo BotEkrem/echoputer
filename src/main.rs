@@ -601,6 +601,7 @@ fn main() -> ! {
         crate::radio::http::networktest();
         crate::radio::camscan::networktest();
         crate::radio::wpa::networktest();
+        crate::config::networktest();
     }
 
     loop {

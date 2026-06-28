@@ -192,6 +192,111 @@ pub fn http_head(
     resp
 }
 
+/// Connect to `ip:port`, POST `body` to `path` (adding the `X-Offload-Key` PSK header
+/// when `key` is Some), read the full response, and return its BODY as an owned String
+/// — the crack-offload reply (the recovered passphrase, or empty). `None` on connect/IO
+/// failure. Mirrors `http_head` but sends a body and returns the response body. The read
+/// window is long because the server runs hashcat synchronously before replying.
+#[allow(dead_code)] // the device-side offload flow wires this (assoc -> post_body)
+#[allow(clippy::too_many_arguments)]
+pub fn post_body(
+    iface: &mut Interface,
+    device: &mut WifiPhy,
+    sockets: &mut SocketSet<'_>,
+    tcp_h: SocketHandle,
+    ip: Ipv4Address,
+    port: u16,
+    path: &str,
+    body: &str,
+    key: Option<&str>,
+    local_port: u16,
+    now: &dyn Fn() -> SmolInstant,
+) -> Option<alloc::string::String> {
+    // ---- (1) fresh connection ----
+    {
+        let cx = iface.context();
+        let s = sockets.get_mut::<tcp::Socket>(tcp_h);
+        s.abort();
+        if s.connect(cx, (ip, port), local_port).is_err() {
+            return None;
+        }
+    }
+    let t = Instant::now();
+    loop {
+        iface.poll(now(), device, sockets);
+        let st = sockets.get_mut::<tcp::Socket>(tcp_h).state();
+        if st == tcp::State::Established {
+            break;
+        }
+        if st == tcp::State::Closed && t.elapsed() >= Duration::from_millis(80) {
+            return None;
+        }
+        if t.elapsed() >= Duration::from_millis(900) {
+            sockets.get_mut::<tcp::Socket>(tcp_h).abort();
+            return None;
+        }
+    }
+    // ---- (2) send the POST (a full .22000 line + headers + key fits in 768) ----
+    let mut reqbuf = [0u8; 768];
+    let req = build_post(&mut reqbuf, path, ip, body, key);
+    {
+        let t2 = Instant::now();
+        let mut sent = 0usize;
+        loop {
+            iface.poll(now(), device, sockets);
+            let s = sockets.get_mut::<tcp::Socket>(tcp_h);
+            if s.can_send() {
+                match s.send_slice(&req[sent..]) {
+                    Ok(k) => {
+                        sent += k;
+                        if sent >= req.len() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            if t2.elapsed() >= Duration::from_millis(500) {
+                sockets.get_mut::<tcp::Socket>(tcp_h).abort();
+                return None;
+            }
+        }
+    }
+    // ---- (3) read the full response; the server cracks synchronously, so wait ----
+    let mut buf = [0u8; 512];
+    let mut filled = 0usize;
+    let t3 = Instant::now();
+    loop {
+        iface.poll(now(), device, sockets);
+        let s = sockets.get_mut::<tcp::Socket>(tcp_h);
+        if s.can_recv() {
+            let n = s
+                .recv(|data| {
+                    let take = core::cmp::min(data.len(), buf.len() - filled);
+                    buf[filled..filled + take].copy_from_slice(&data[..take]);
+                    (take, take)
+                })
+                .unwrap_or(0);
+            filled += n;
+            if filled >= buf.len() {
+                break;
+            }
+        } else if matches!(s.state(), tcp::State::CloseWait | tcp::State::Closed) {
+            break;
+        }
+        if t3.elapsed() >= Duration::from_secs(90) {
+            break;
+        }
+    }
+    sockets.get_mut::<tcp::Socket>(tcp_h).abort();
+    let b = resp_body(&buf[..filled]);
+    if b.is_empty() {
+        None
+    } else {
+        Some(alloc::string::String::from_utf8_lossy(b).trim().into())
+    }
+}
+
 // ----------------------------- request build ------------------------------
 
 struct Buf<'a> {
@@ -227,20 +332,31 @@ fn build_request<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, auth: Optio
 
 /// Build an HTTP/1.0 POST with a text body — the crack-server offload: POST a `.22000`
 /// line to a server, then read the recovered passphrase from the response body. The
-/// body is `&str` since a `.22000` line is ASCII. (Builder + self-test only for now;
-/// the live association-to-server + send is a field step.)
+/// body is `&str` since a `.22000` line is ASCII. `key` adds the `X-Offload-Key` PSK
+/// header the crack-server requires.
 #[cfg_attr(not(feature = "networktest"), allow(dead_code))]
-fn build_post<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, body: &str) -> &'a [u8] {
+fn build_post<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, body: &str, key: Option<&str>) -> &'a [u8] {
     use core::fmt::Write;
     let o = ip.octets();
     let mut w = Buf { b: buf, n: 0 };
-    let _ = write!(
-        w,
-        "POST {} HTTP/1.0\r\nHost: {}.{}.{}.{}\r\nUser-Agent: echoputer\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        path, o[0], o[1], o[2], o[3], body.len(), body
-    );
+    let _ = write!(w, "POST {} HTTP/1.0\r\nHost: {}.{}.{}.{}\r\nUser-Agent: echoputer\r\n", path, o[0], o[1], o[2], o[3]);
+    if let Some(k) = key {
+        let _ = write!(w, "X-Offload-Key: {k}\r\n");
+    }
+    let _ = write!(w, "Content-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
     let n = w.n;
     &buf[..n]
+}
+
+/// The body of an HTTP response = everything after the first CRLFCRLF (or LFLF).
+fn resp_body(buf: &[u8]) -> &[u8] {
+    if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+        &buf[p + 4..]
+    } else if let Some(p) = buf.windows(2).position(|w| w == b"\n\n") {
+        &buf[p + 2..]
+    } else {
+        &[]
+    }
 }
 
 // ------------------------------ response parse -----------------------------
@@ -387,12 +503,13 @@ pub fn networktest() {
         let _ = build_request(&mut tiny, "/", Ipv4Address::new(1, 2, 3, 4), None);
         pass += 1;
     }
-    // ---- (A3) POST builder (crack-server offload) ----
+    // ---- (A3) POST builder (crack-server offload), incl the PSK header ----
     {
         let mut buf = [0u8; 256];
-        let req = build_post(&mut buf, "/crack", Ipv4Address::new(10, 0, 0, 2), "WPA*02*ab");
+        let req = build_post(&mut buf, "/crack", Ipv4Address::new(10, 0, 0, 2), "WPA*02*ab", Some("sekret"));
         let s = core::str::from_utf8(req).unwrap_or("");
         if s.starts_with("POST /crack HTTP/1.0\r\n")
+            && s.contains("\r\nX-Offload-Key: sekret\r\n")
             && s.contains("\r\nContent-Length: 9\r\n")
             && s.ends_with("\r\n\r\nWPA*02*ab")
         {
@@ -400,6 +517,18 @@ pub fn networktest() {
         } else {
             fail += 1;
             println!("    FAIL build post: {s:?}");
+        }
+    }
+    // ---- (A4) response-body extraction (offload reply parse) ----
+    {
+        let ok1 = resp_body(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\npassw0rd") == b"passw0rd";
+        let ok2 = resp_body(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").is_empty();
+        let ok3 = resp_body(b"no headers here").is_empty();
+        if ok1 && ok2 && ok3 {
+            pass += 1;
+        } else {
+            fail += 1;
+            println!("    FAIL resp_body: {ok1} {ok2} {ok3}");
         }
     }
     println!("    parser+builder: {pass} pass, {fail} fail");
