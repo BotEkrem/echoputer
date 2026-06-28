@@ -234,8 +234,13 @@ reserves the RAM the boot stack needs.
 | `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. |
 | `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
 | `selftest` | boot-time serial self-test of every radio tool. |
-| `networktest` | boot-time serial self-test of the no-radio crypto/parser vectors (HTTP/Digest/base64, WPA SHA1/HMAC/PBKDF2/PMK + EAPOL parse + wordlist crack + `.22000` export). |
+| `networktest` | boot-time serial self-test of the no-radio crypto/parser vectors: HTTP/Digest/base64/chunked, SHA-256 + HMAC-SHA256 (the signed offload), WPA SHA1/HMAC/PBKDF2/PMK + EAPOL/PMKID parse + wordlist crack + `.22000` export, the camera snapshot/PTZ path maps, the wardrive CSV rows, and the offload-config round-trip. |
 | `audiodiag` | logs I2S audio health (throughput, underruns) over serial once a second, for debugging the audio path. |
+
+A few more boot-time **diagnostic gates** exist for bring-up and aren't really
+user features: `irtest` (sweeps IR protocols/codes to find what a TV responds to),
+`keylog` (prints raw keyboard row/col events), and `psramprobe` (reports external
+PSRAM size). CI compiles all of these so they never bit-rot.
 
 Combine them as you like — `cargo build --release --features emugbc,player` is the
 full build. You don't have to build any of these yourself, though: every push to
