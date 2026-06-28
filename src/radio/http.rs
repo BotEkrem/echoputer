@@ -128,9 +128,9 @@ pub fn http_head(
     resp.connected = true;
 
     // ---- (2) send the request ----
-    // 512 so a full Digest `Authorization` header (realm+nonce+response+opaque)
-    // fits alongside the request line and base headers.
-    let mut reqbuf = [0u8; 512];
+    // 768 so a full Digest `Authorization` header (realm+nonce+response+opaque+uri)
+    // fits alongside the request line and base headers without truncation.
+    let mut reqbuf = [0u8; 768];
     let req = build_request(&mut reqbuf, path, ip, auth);
     {
         let t2 = Instant::now();
@@ -190,6 +190,306 @@ pub fn http_head(
 
     parse_head(&buf[..filled], &mut resp);
     resp
+}
+
+/// Connect to `ip:port`, `GET path` (with optional `auth`), and STREAM the response
+/// body to `on_chunk` (called with each DECODED body slice; return `false` to abort).
+/// Returns `(status, body_bytes_delivered, complete)`. `complete` is true only when
+/// the transfer ended cleanly (Content-Length reached, final 0-chunk for chunked, or
+/// the server closed a length-less response) — false on the read-timeout cap, so the
+/// caller can reject a truncated file. Transfer-Encoding: chunked is de-framed, so a
+/// chunked camera snapshot is delivered as raw JPEG bytes (no chunk-size lines). Used
+/// to pull a (possibly large) snapshot straight to SD without buffering it in RAM. `0`
+/// status = connect/send failure or unparsable head. The header phase reads only what
+/// fits the head buffer and leaves the rest queued, so no body bytes are dropped.
+#[cfg_attr(not(feature = "networktest"), allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
+pub fn http_get_stream(
+    iface: &mut Interface,
+    device: &mut WifiPhy,
+    sockets: &mut SocketSet<'_>,
+    tcp_h: SocketHandle,
+    ip: Ipv4Address,
+    port: u16,
+    path: &str,
+    auth: Option<&str>,
+    local_port: u16,
+    now: &dyn Fn() -> SmolInstant,
+    mut on_chunk: impl FnMut(&[u8]) -> bool,
+) -> (u16, usize, bool) {
+    // ---- (1) connect ----
+    {
+        let cx = iface.context();
+        let s = sockets.get_mut::<tcp::Socket>(tcp_h);
+        s.abort();
+        if s.connect(cx, (ip, port), local_port).is_err() {
+            return (0, 0, false);
+        }
+    }
+    let t = Instant::now();
+    loop {
+        iface.poll(now(), device, sockets);
+        let st = sockets.get_mut::<tcp::Socket>(tcp_h).state();
+        if st == tcp::State::Established {
+            break;
+        }
+        if st == tcp::State::Closed && t.elapsed() >= Duration::from_millis(80) {
+            return (0, 0, false);
+        }
+        if t.elapsed() >= Duration::from_millis(900) {
+            sockets.get_mut::<tcp::Socket>(tcp_h).abort();
+            return (0, 0, false);
+        }
+    }
+    // ---- (2) send GET ----
+    let mut reqbuf = [0u8; 768];
+    let req_len = build_request(&mut reqbuf, path, ip, auth).len();
+    {
+        let t2 = Instant::now();
+        let mut sent = 0usize;
+        loop {
+            iface.poll(now(), device, sockets);
+            let s = sockets.get_mut::<tcp::Socket>(tcp_h);
+            if s.can_send() {
+                match s.send_slice(&reqbuf[sent..req_len]) {
+                    Ok(k) => {
+                        sent += k;
+                        if sent >= req_len {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            if t2.elapsed() >= Duration::from_millis(500) {
+                sockets.get_mut::<tcp::Socket>(tcp_h).abort();
+                return (0, 0, false);
+            }
+        }
+    }
+    // ---- (3) read head (into `head`), then stream/de-chunk the body ----
+    let mut head = [0u8; 512];
+    let mut head_len = 0usize;
+    let mut header_done = false;
+    let mut status = 0u16;
+    let mut content_len: Option<usize> = None;
+    let mut chunked = false;
+    let mut body_total = 0usize;
+    let mut complete = false;
+    let mut dech = Dechunk::new();
+    let mut buf = [0u8; 512];
+    let t3 = Instant::now();
+    loop {
+        iface.poll(now(), device, sockets);
+        let s = sockets.get_mut::<tcp::Socket>(tcp_h);
+        if s.can_recv() {
+            // pull the next segment into `buf` (header phase caps at the head buffer
+            // and leaves the rest queued so no body bytes are dropped at the split).
+            let n = if !header_done {
+                let room = head.len() - head_len;
+                if room == 0 {
+                    break; // headers larger than the head buffer (not a camera)
+                }
+                s.recv(|data| {
+                    let take = data.len().min(room);
+                    head[head_len..head_len + take].copy_from_slice(&data[..take]);
+                    (take, take)
+                })
+                .unwrap_or(0)
+            } else {
+                s.recv(|data| {
+                    let take = data.len().min(buf.len());
+                    buf[..take].copy_from_slice(&data[..take]);
+                    (take, take)
+                })
+                .unwrap_or(0)
+            };
+            if !header_done {
+                head_len += n;
+                if let Some(p) = find_crlfcrlf(&head[..head_len]) {
+                    header_done = true;
+                    parse_status_clen(&head[..p], &mut status, &mut content_len, &mut chunked);
+                    // the body bytes already buffered after the boundary — copy out of
+                    // `head` so the on_chunk closure doesn't alias it.
+                    let body0 = p + 4;
+                    if body0 < head_len {
+                        let m = head_len - body0;
+                        buf[..m].copy_from_slice(&head[body0..head_len]);
+                        if !feed_body(chunked, &mut dech, &buf[..m], &mut body_total, &mut on_chunk) {
+                            break;
+                        }
+                    }
+                }
+            } else if n > 0 && !feed_body(chunked, &mut dech, &buf[..n], &mut body_total, &mut on_chunk) {
+                break;
+            }
+            if chunked && dech.done {
+                complete = true;
+                break;
+            }
+            if let Some(cl) = content_len {
+                if header_done && body_total >= cl {
+                    complete = true;
+                    break;
+                }
+            }
+        } else if matches!(s.state(), tcp::State::CloseWait | tcp::State::Closed) {
+            // server closed: a length-less, non-chunked response is complete-on-close.
+            complete = header_done && content_len.is_none() && !chunked;
+            break;
+        }
+        if t3.elapsed() >= Duration::from_secs(8) {
+            break; // timeout: leave `complete` false (possible truncation)
+        }
+    }
+    sockets.get_mut::<tcp::Socket>(tcp_h).abort();
+    (status, body_total, complete)
+}
+
+/// Deliver a received body segment to `on_chunk`, de-chunking first if the response
+/// is `Transfer-Encoding: chunked`. Returns false if `on_chunk` asked to abort.
+fn feed_body(
+    chunked: bool,
+    dech: &mut Dechunk,
+    seg: &[u8],
+    body_total: &mut usize,
+    on_chunk: &mut impl FnMut(&[u8]) -> bool,
+) -> bool {
+    if chunked {
+        dech.feed(seg, &mut |d: &[u8]| {
+            *body_total += d.len();
+            on_chunk(d)
+        })
+    } else {
+        *body_total += seg.len();
+        on_chunk(seg)
+    }
+}
+
+/// Find the `\r\n\r\n` header/body boundary, returning the index of the first `\r`.
+fn find_crlfcrlf(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+/// Parse the status code, `Content-Length`, and `Transfer-Encoding: chunked` from a
+/// response head (no body).
+fn parse_status_clen(head: &[u8], status: &mut u16, content_len: &mut Option<usize>, chunked: &mut bool) {
+    if head.len() >= 12 && &head[..7] == b"HTTP/1." && head[9..12].iter().all(u8::is_ascii_digit) {
+        *status = (head[9] - b'0') as u16 * 100 + (head[10] - b'0') as u16 * 10 + (head[11] - b'0') as u16;
+    }
+    if let Some(v) = find_header(head, b"content-length") {
+        let mut n = 0usize;
+        for &b in v {
+            if b.is_ascii_digit() {
+                n = n.saturating_mul(10).saturating_add((b - b'0') as usize);
+            } else {
+                break;
+            }
+        }
+        *content_len = Some(n);
+    }
+    if let Some(v) = find_header(head, b"transfer-encoding") {
+        // case-insensitive substring "chunked"
+        let mut i = 0;
+        while i + 7 <= v.len() {
+            if v[i..i + 7].eq_ignore_ascii_case(b"chunked") {
+                *chunked = true;
+                *content_len = None; // chunked overrides any (illegal) length
+                break;
+            }
+            i += 1;
+        }
+    }
+}
+
+/// Incremental HTTP chunked-transfer decoder. Fed arbitrary TCP segments; emits the
+/// decoded data runs and tracks when the terminating 0-length chunk is seen.
+struct Dechunk {
+    size_rem: usize,    // data bytes left in the current chunk
+    reading_size: bool, // parsing the hex chunk-size line
+    size_val: usize,
+    size_ext: bool,  // a ';' chunk-extension began — stop reading hex until CR/LF
+    expect_lf: bool, // saw '\r' in the size line, expecting '\n'
+    post_data: u8,   // after a chunk's data: 2 = expect '\r', 1 = expect '\n'
+    pub done: bool,  // the final 0-length chunk was seen
+}
+impl Dechunk {
+    fn new() -> Self {
+        Self { size_rem: 0, reading_size: true, size_val: 0, size_ext: false, expect_lf: false, post_data: 0, done: false }
+    }
+    /// Feed one segment; call `emit` with decoded data runs. Returns false if `emit`
+    /// asked to abort. Tolerant of bare `\n`, chunk extensions (`;...`), and segments
+    /// that split a chunk anywhere.
+    fn feed(&mut self, mut seg: &[u8], emit: &mut impl FnMut(&[u8]) -> bool) -> bool {
+        while !seg.is_empty() && !self.done {
+            if self.post_data > 0 {
+                let b = seg[0];
+                seg = &seg[1..];
+                if self.post_data == 2 {
+                    if b == b'\n' {
+                        // tolerate a bare LF terminator
+                        self.post_data = 0;
+                        self.reading_size = true;
+                        self.size_val = 0;
+                        self.size_ext = false;
+                        self.expect_lf = false;
+                    } else {
+                        self.post_data = 1; // consumed '\r'
+                    }
+                } else {
+                    self.post_data = 0;
+                    self.reading_size = true;
+                    self.size_val = 0;
+                    self.size_ext = false;
+                    self.expect_lf = false;
+                }
+                continue;
+            }
+            if self.reading_size {
+                let b = seg[0];
+                seg = &seg[1..];
+                if self.expect_lf {
+                    self.expect_lf = false;
+                    self.reading_size = false;
+                    self.size_rem = self.size_val;
+                    if self.size_val == 0 {
+                        self.done = true;
+                    }
+                    continue;
+                }
+                match b {
+                    b'\r' => self.expect_lf = true,
+                    b'\n' => {
+                        self.reading_size = false;
+                        self.size_rem = self.size_val;
+                        if self.size_val == 0 {
+                            self.done = true;
+                        }
+                    }
+                    b';' => self.size_ext = true, // chunk extension begins — ignore the rest
+                    _ if self.size_ext => {}      // inside an extension; ignore until CR/LF
+                    b'0'..=b'9' => self.size_val = self.size_val * 16 + (b - b'0') as usize,
+                    b'a'..=b'f' => self.size_val = self.size_val * 16 + (b - b'a' + 10) as usize,
+                    b'A'..=b'F' => self.size_val = self.size_val * 16 + (b - b'A' + 10) as usize,
+                    _ => {} // stray char in a size line — ignore
+                }
+                continue;
+            }
+            // data phase: emit a run, then consume the trailing CRLF
+            let take = self.size_rem.min(seg.len());
+            if take > 0 {
+                if !emit(&seg[..take]) {
+                    return false;
+                }
+                seg = &seg[take..];
+                self.size_rem -= take;
+            }
+            if self.size_rem == 0 {
+                self.post_data = 2;
+            }
+        }
+        true
+    }
 }
 
 /// Connect to `ip:port`, POST `body` to `path` (adding the `X-Offload-Key` PSK header
@@ -357,8 +657,9 @@ fn build_request<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, auth: Optio
 
 /// Build an HTTP/1.0 POST with a text body — the crack-server offload: POST a `.22000`
 /// line to a server, then read the recovered passphrase from the response body. The
-/// body is `&str` since a `.22000` line is ASCII. `key` adds the `X-Offload-Key` PSK
-/// header the crack-server requires.
+/// body is `&str` since a `.22000` line is ASCII. When `key` (the shared PSK) is set,
+/// the request is signed with `X-Offload-Sig: HMAC-SHA256(psk, body)` — the PSK itself
+/// is never put on the wire, so a sniffed request can't recover or reuse the secret.
 #[cfg_attr(not(feature = "networktest"), allow(dead_code))]
 fn build_post<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, body: &str, key: Option<&str>) -> &'a [u8] {
     use core::fmt::Write;
@@ -366,7 +667,8 @@ fn build_post<'a>(buf: &'a mut [u8], path: &str, ip: Ipv4Address, body: &str, ke
     let mut w = Buf { b: buf, n: 0, overflow: false };
     let _ = write!(w, "POST {} HTTP/1.0\r\nHost: {}.{}.{}.{}\r\nUser-Agent: echoputer\r\n", path, o[0], o[1], o[2], o[3]);
     if let Some(k) = key {
-        let _ = write!(w, "X-Offload-Key: {k}\r\n");
+        let sig = crate::radio::sha256::hmac_sha256_hex(k, body.as_bytes());
+        let _ = write!(w, "X-Offload-Sig: {sig}\r\n");
     }
     let _ = write!(w, "Content-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
     // If anything didn't fit, the body got truncated while Content-Length still
@@ -534,13 +836,21 @@ pub fn networktest() {
         let _ = build_request(&mut tiny, "/", Ipv4Address::new(1, 2, 3, 4), None);
         pass += 1;
     }
-    // ---- (A3) POST builder (crack-server offload), incl the PSK header ----
+    // ---- (A3) POST builder (crack-server offload): signed, PSK never on the wire ----
     {
         let mut buf = [0u8; 256];
         let req = build_post(&mut buf, "/crack", Ipv4Address::new(10, 0, 0, 2), "WPA*02*ab", Some("sekret"));
         let s = core::str::from_utf8(req).unwrap_or("");
+        // X-Offload-Sig must be the exact HMAC-SHA256(sekret, "WPA*02*ab") — the same
+        // value openssl + the crack-server compute — and the PSK must NOT appear.
+        const REF_SIG: &str = "9ad9f3d9c28b43a2dfb4cb03c7ee98d469df879ed0e5bb6b9de399218310f01d";
+        let sig_ok = s.find("X-Offload-Sig: ").is_some_and(|p| {
+            let hex = s[p + 15..].split("\r\n").next().unwrap_or("");
+            hex == REF_SIG
+        });
         if s.starts_with("POST /crack HTTP/1.0\r\n")
-            && s.contains("\r\nX-Offload-Key: sekret\r\n")
+            && sig_ok
+            && !s.contains("sekret")
             && s.contains("\r\nContent-Length: 9\r\n")
             && s.ends_with("\r\n\r\nWPA*02*ab")
         {
@@ -562,10 +872,49 @@ pub fn networktest() {
             println!("    FAIL resp_body: {ok1} {ok2} {ok3}");
         }
     }
+    // ---- (A5) chunked transfer decoder (camera snapshot streaming) ----
+    {
+        // "Wiki" + "pedia" -> "Wikipedia", with a chunk extension + the 0 terminator.
+        let body = b"4\r\nWiki\r\n5;ext=1\r\npedia\r\n0\r\n\r\n";
+        // feed whole, then byte-by-byte (splits every chunk) — both must decode equal.
+        let whole = dechunk_collect(body, body.len());
+        let split = dechunk_collect(body, 1);
+        if whole.as_deref() == Some("Wikipedia") && split.as_deref() == Some("Wikipedia") {
+            pass += 1;
+        } else {
+            fail += 1;
+            println!("    FAIL dechunk: whole={whole:?} split={split:?}");
+        }
+    }
     println!("    parser+builder: {pass} pass, {fail} fail");
 
     // ---- (B) full TCP round-trip over loopback (temp in-firmware server) ----
     loopback_roundtrip();
+}
+
+/// Run `Dechunk` over `body` fed in `step`-byte segments, returning the decoded text
+/// (or None if the terminating 0-chunk was never reached).
+#[cfg(feature = "networktest")]
+fn dechunk_collect(body: &[u8], step: usize) -> Option<alloc::string::String> {
+    let mut d = Dechunk::new();
+    let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    let mut i = 0;
+    while i < body.len() {
+        let end = (i + step).min(body.len());
+        let ok = d.feed(&body[i..end], &mut |s: &[u8]| {
+            out.extend_from_slice(s);
+            true
+        });
+        if !ok {
+            return None;
+        }
+        i = end;
+    }
+    if d.done {
+        Some(alloc::string::String::from_utf8_lossy(&out).into_owned())
+    } else {
+        None
+    }
 }
 
 /// Stand up a temporary HTTP server + client on a single smoltcp loopback

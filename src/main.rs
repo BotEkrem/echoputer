@@ -594,7 +594,7 @@ fn main() -> ! {
     // USB-serial self-test build: exercise every radio tool over serial, then fall
     // through to the normal menu. No-op in a normal build.
     #[cfg(feature = "selftest")]
-    selftest::run(&mut radio);
+    selftest::run(&mut radio, &vm);
 
     // Network-stack self-test build: HTTP-client core (parser + builder + a
     // smoltcp loopback round-trip) + the camera classifier, no radio needed.
@@ -604,6 +604,7 @@ fn main() -> ! {
         crate::radio::http::networktest();
         crate::radio::camscan::networktest();
         crate::radio::wpa::networktest();
+        crate::radio::sha256::networktest();
         crate::config::networktest();
     }
 
@@ -1572,7 +1573,7 @@ fn main() -> ! {
                                 hacking.draw_busy(&mut fbuf, bt, i18n::t(app::JOINING));
                                 blit!();
                                 let mut last = Instant::now();
-                                let res = radio.run_camscan(ssid, known, |st| {
+                                let res = radio.run_camscan(ssid, known, &vm, |st| {
                                     let mut stop = false;
                                     while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
                                         if ev.pressed {
@@ -1594,10 +1595,105 @@ fn main() -> ! {
                                 });
                                 g0_prev_low = g0.is_low();
                                 match res {
-                                    Ok(r) if r.got_ip => hacking.show_attack_done(&mut fbuf, Some(r.cam_count() as u32)),
+                                    Ok(r) if r.got_ip => {
+                                        let cams = r.cam_count() as u32;
+                                        let snap = r.snap_bytes;
+                                        // effective WiFi pass to re-join for camera control:
+                                        // the cracked one, else whatever we joined with.
+                                        let mut wbuf = [0u8; 24];
+                                        let wlen = {
+                                            let w = if r.wifi_pass_len > 0 {
+                                                r.wifi_pass_str()
+                                            } else {
+                                                known.unwrap_or("")
+                                            };
+                                            let n = w.len().min(24);
+                                            wbuf[..n].copy_from_slice(&w.as_bytes()[..n]);
+                                            n
+                                        };
+                                        let wifi = core::str::from_utf8(&wbuf[..wlen]).unwrap_or("");
+                                        let tgt = r.hosts.iter().find(|h| h.ip == r.snap_ip);
+                                        hacking.show_camscan_done(&mut fbuf, cams, snap, tgt, ssid, wifi);
+                                    }
                                     Ok(r) => hacking.show_attack_failed(&mut fbuf, r.phase),
                                     Err(e) => hacking.show_attack_failed(&mut fbuf, e),
                                 }
+                            }
+                        }
+                        hacking::Action::CamCtl => {
+                            if let Some((cip, cport, cbrand, cbasic, cdigest)) = hacking.cam_target() {
+                                // copy ssid/cred/wifi to locals so `hacking` isn't borrowed
+                                // while the input closure (free-fn draw) runs.
+                                let mut sbuf = [0u8; 32];
+                                let sl = {
+                                    let s = hacking.cam_ssid_str();
+                                    let n = s.len().min(32);
+                                    sbuf[..n].copy_from_slice(&s.as_bytes()[..n]);
+                                    n
+                                };
+                                let ssid = core::str::from_utf8(&sbuf[..sl]).unwrap_or("");
+                                let mut credbuf = [0u8; 24];
+                                let cl = {
+                                    let c = hacking.cam_cred_str();
+                                    let n = c.len().min(24);
+                                    credbuf[..n].copy_from_slice(&c.as_bytes()[..n]);
+                                    n
+                                };
+                                let cred = core::str::from_utf8(&credbuf[..cl]).unwrap_or("");
+                                let mut wbuf = [0u8; 24];
+                                let wl = {
+                                    let w = hacking.cam_wifi_str();
+                                    let n = w.len().min(24);
+                                    wbuf[..n].copy_from_slice(&w.as_bytes()[..n]);
+                                    n
+                                };
+                                let wifi = core::str::from_utf8(&wbuf[..wl]).unwrap_or("");
+                                let mut last = Instant::now();
+                                let _ = radio.run_camctl(
+                                    ssid,
+                                    Some(wifi),
+                                    cip,
+                                    cport,
+                                    cbrand,
+                                    cbasic,
+                                    cdigest,
+                                    cred,
+                                    &vm,
+                                    |ctl| {
+                                        let mut cmd = radio::camscan::CamCmd::Idle;
+                                        while let Ok(Some(ev)) = tca8418::next_event(&mut i2c) {
+                                            if ev.pressed {
+                                                let rc = (ev.row, ev.col);
+                                                cmd = if rc == K_HOME {
+                                                    radio::camscan::CamCmd::Quit
+                                                } else if rc == K_UP {
+                                                    radio::camscan::CamCmd::Move(radio::camscan::PtzDir::Up)
+                                                } else if rc == K_DOWN {
+                                                    radio::camscan::CamCmd::Move(radio::camscan::PtzDir::Down)
+                                                } else if rc == K_LEFT {
+                                                    radio::camscan::CamCmd::Move(radio::camscan::PtzDir::Left)
+                                                } else if rc == K_RIGHT {
+                                                    radio::camscan::CamCmd::Move(radio::camscan::PtzDir::Right)
+                                                } else if crate::hal::keymap::ch_shift(rc.0, rc.1, false) == Some(b' ') {
+                                                    radio::camscan::CamCmd::Snap
+                                                } else {
+                                                    cmd
+                                                };
+                                            }
+                                        }
+                                        if g0.is_low() {
+                                            cmd = radio::camscan::CamCmd::Quit;
+                                        }
+                                        if last.elapsed() >= Duration::from_millis(200) || !matches!(cmd, radio::camscan::CamCmd::Idle) {
+                                            last = Instant::now();
+                                            hacking::draw_camctl(&mut fbuf, ctl);
+                                            blit!();
+                                        }
+                                        cmd
+                                    },
+                                );
+                                g0_prev_low = g0.is_low();
+                                hacking.redraw(&mut fbuf); // back to the Done screen
                             }
                         }
                         hacking::Action::BleSpam(mode) => {

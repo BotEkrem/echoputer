@@ -68,7 +68,7 @@ elif [ ! -f "$WL" ]; then
 fi
 chown -R offload:offload "$WORKDIR"
 
-# 5. shared secret (PSK) the device must send as X-Offload-Key
+# 5. shared secret (PSK); the device signs each request with HMAC-SHA256(PSK, body)
 PSK="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
 # 6. hardened systemd service (PSK-gated; binds $BIND)
@@ -109,15 +109,20 @@ systemctl --no-pager --lines=4 status echoputer-offload.service || true
 echo
 say "listening on ${BIND}:${PORT}  (POST a .22000 line to /crack, PSK-gated)"
 echo
-red "=================== SHARED SECRET (save this) ==================="
-red "  X-Offload-Key: ${PSK}"
-red " Put it in the device's offload config; every crack request needs it."
-red "================================================================="
+red "=================== SHARED SECRET / PSK (save this) ==================="
+red "  ${PSK}"
+red " Put it in the device's offload config (Settings or Web UI) as the PSK."
+red " The device signs each request with HMAC-SHA256(PSK, body); the PSK itself"
+red " is never sent on the wire."
+red "======================================================================"
 echo
-red "Still PLAIN HTTP — the PSK stops randoms, not a network sniffer."
-red "Keep this on a TRUSTED LAN / behind a firewall; don't expose ${PORT}"
-red "to the public internet. e.g.:  ufw allow from <lab-subnet> to any port ${PORT}"
+red "Still PLAIN HTTP — the HMAC stops forgery/replay-on-other-bodies + hides the"
+red "PSK, but the .22000 + cracked pass travel in clear. Keep this on a TRUSTED LAN /"
+red "behind a firewall; don't expose ${PORT} to the public internet."
+red "e.g.:  ufw allow from <lab-subnet> to any port ${PORT}"
 echo
-say "test:    curl -s -H 'X-Offload-Key: ${PSK}' --data-binary @HS22000.TXT http://<this-ip>:${PORT}/crack ; echo"
+say "test:  BODY=\$(tr -d '\\r\\n' < HS22000.TXT); \\"
+say "       SIG=\$(printf '%s' \"\$BODY\" | openssl dgst -sha256 -hmac '${PSK}' | sed 's/^.*= //'); \\"
+say "       curl -s -H \"X-Offload-Sig: \$SIG\" --data-binary \"\$BODY\" http://<this-ip>:${PORT}/crack; echo"
 say "logs:    journalctl -u echoputer-offload -f"
 say "remove:  systemctl disable --now echoputer-offload && rm -f ${BIN} ${UNIT}"

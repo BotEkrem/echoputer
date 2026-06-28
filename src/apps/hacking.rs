@@ -290,6 +290,7 @@ pub enum Action {
     Handshake,
     NetScan,
     CamScan,
+    CamCtl,
     Portal,
     BleSpam(ble_spam::Mode),
 }
@@ -364,6 +365,21 @@ pub struct Hacking {
     wifi_pass_len: usize,
     wifi_crack: bool, // true = user chose attack/crack (TAB) instead of a typed password
     hs_captured: bool, // last handshake attempt extracted a full msg1+msg2
+    cam_snap: usize, // bytes of the JPEG snapshot grabbed to SD by the last CamScan
+    // interactive camera-control target, stashed from the last CamScan that grabbed a
+    // snapshot, so the Done screen can offer live PTZ control (re-joins + drives it).
+    cam_has: bool,
+    cam_ip: [u8; 4],
+    cam_port: u16,
+    cam_brand: &'static str,
+    cam_basic: bool,
+    cam_digest: bool,
+    cam_cred: [u8; 24],
+    cam_cred_len: usize,
+    cam_wifi: [u8; 24], // effective WiFi pass to re-associate ("" = open / user-typed)
+    cam_wifi_len: usize,
+    cam_ssid: [u8; 32], // the network to re-join for control (stashed at scan time)
+    cam_ssid_len: usize,
 }
 
 impl Hacking {
@@ -391,6 +407,19 @@ impl Hacking {
             wifi_pass_len: 0,
             wifi_crack: false,
             hs_captured: false,
+            cam_snap: 0,
+            cam_has: false,
+            cam_ip: [0; 4],
+            cam_port: 0,
+            cam_brand: "",
+            cam_basic: false,
+            cam_digest: false,
+            cam_cred: [0; 24],
+            cam_cred_len: 0,
+            cam_wifi: [0; 24],
+            cam_wifi_len: 0,
+            cam_ssid: [0; 32],
+            cam_ssid_len: 0,
         }
     }
 
@@ -874,6 +903,10 @@ impl Hacking {
     }
 
     fn key_done(&mut self, rc: (u8, u8)) -> Action {
+        // 'C' on a CamScan result that grabbed a snapshot -> live camera control
+        if self.cam_has && matches!(self.pending, Tool::CamScan) && keymap::ch_shift(rc.0, rc.1, false) == Some(b'c') {
+            return Action::CamCtl;
+        }
         match rc {
             crate::K_ENTER => match self.pending {
                 Tool::Deauth | Tool::EvilTwin | Tool::Handshake | Tool::NetScan | Tool::CamScan => Action::ScanTargets,
@@ -1023,6 +1056,73 @@ impl Hacking {
             None => self.scan_failed = true,
         }
         self.view = View::Done;
+        self.draw(d, true);
+    }
+
+    /// Camera Finder result intake: `cams` found + `snap_bytes` of a JPEG pulled to
+    /// SD (0 = none). When a snapshot was grabbed off `tgt`, stash that camera so the
+    /// Done screen can offer live PTZ control (re-joining `wifi_pass`).
+    pub fn show_camscan_done<D: DrawTarget<Color = Rgb565>>(
+        &mut self,
+        d: &mut D,
+        cams: u32,
+        snap_bytes: usize,
+        tgt: Option<&camscan::CamHost>,
+        ssid: &str,
+        wifi_pass: &str,
+    ) {
+        self.attack_sent = cams;
+        self.cam_snap = snap_bytes;
+        self.scan_failed = false;
+        self.fail_msg = None;
+        self.cam_has = false;
+        if let Some(h) = tgt {
+            if snap_bytes > 0 {
+                self.cam_ip = h.ip;
+                self.cam_port = h.port;
+                self.cam_brand = h.brand;
+                self.cam_basic = h.auth_basic;
+                self.cam_digest = h.auth_digest;
+                let cb = h.cred_str().as_bytes();
+                let cn = cb.len().min(self.cam_cred.len());
+                self.cam_cred[..cn].copy_from_slice(&cb[..cn]);
+                self.cam_cred_len = cn;
+                let wb = wifi_pass.as_bytes();
+                let wn = wb.len().min(self.cam_wifi.len());
+                self.cam_wifi[..wn].copy_from_slice(&wb[..wn]);
+                self.cam_wifi_len = wn;
+                let sb = ssid.as_bytes();
+                let sn = sb.len().min(self.cam_ssid.len());
+                self.cam_ssid[..sn].copy_from_slice(&sb[..sn]);
+                self.cam_ssid_len = sn;
+                self.cam_has = true;
+            }
+        }
+        self.view = View::Done;
+        self.draw(d, true);
+    }
+
+    /// The stashed camera-control target (ip, port, brand, basic, digest), if the last
+    /// CamScan grabbed a snapshot off a controllable camera.
+    pub fn cam_target(&self) -> Option<([u8; 4], u16, &'static str, bool, bool)> {
+        if self.cam_has {
+            Some((self.cam_ip, self.cam_port, self.cam_brand, self.cam_basic, self.cam_digest))
+        } else {
+            None
+        }
+    }
+    pub fn cam_cred_str(&self) -> &str {
+        core::str::from_utf8(&self.cam_cred[..self.cam_cred_len]).unwrap_or("")
+    }
+    pub fn cam_wifi_str(&self) -> &str {
+        core::str::from_utf8(&self.cam_wifi[..self.cam_wifi_len]).unwrap_or("")
+    }
+    pub fn cam_ssid_str(&self) -> &str {
+        core::str::from_utf8(&self.cam_ssid[..self.cam_ssid_len]).unwrap_or("")
+    }
+    /// Repaint the current view — used to return to the Done screen after the
+    /// interactive camera-control sub-mode exits.
+    pub fn redraw<D: DrawTarget<Color = Rgb565>>(&mut self, d: &mut D) {
         self.draw(d, true);
     }
 
@@ -1516,6 +1616,14 @@ impl Hacking {
             theme::text_center(d, i18n::t(hacking::SCAN_DONE), theme::W / 2, 40, theme::TITLE_FONT, theme::accent());
             let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::CAMERAS_FOUND));
             theme::text_center(d, &line, theme::W / 2, 64, theme::BODY_FONT, theme::FG);
+            // a snapshot grabbed off a cracked camera = proof of access
+            if self.cam_snap > 0 {
+                let kb = (self.cam_snap + 512) / 1024;
+                theme::text_center(d, &alloc::format!("{} {}KB", i18n::t(hacking::SNAP_SAVED), kb), theme::W / 2, 84, theme::BODY_FONT, RADAR_GREEN);
+            }
+            if self.cam_has {
+                theme::text_center(d, i18n::t(hacking::CAM_CONTROL_HINT), theme::W / 2, 100, theme::BODY_FONT, theme::accent());
+            }
         } else if matches!(self.pending, Tool::Deauth) {
             // raw deauth TX is rejected by this ESP IDF blob -> attack_sent stays 0; be honest.
             theme::text_center(d, i18n::t(hacking::DEAUTH_NA), theme::W / 2, 38, theme::TITLE_FONT, theme::DESTRUCTIVE);
@@ -1719,13 +1827,63 @@ pub fn draw_camscan<D: DrawTarget<Color = Rgb565>>(d: &mut D, st: &camscan::CamR
     theme::text(d, &alloc::format!("hosts {}", st.live), PANEL_X, 50, theme::BODY_FONT, theme::MUTED);
     theme::text(d, &alloc::format!("cam {}", st.cam_count()), PANEL_X, 62, theme::BODY_FONT, theme::DESTRUCTIVE);
     theme::text(d, &alloc::format!("pwn {}", st.cracked_count()), PANEL_X, 74, theme::BODY_FONT, RADAR_GREEN);
+    if st.snap_bytes > 0 {
+        theme::text(d, &alloc::format!("snap {}KB", (st.snap_bytes + 512) / 1024), PANEL_X, 86, theme::BODY_FONT, RADAR_GREEN);
+    }
     // a couple of cracked creds (most interesting finds)
-    let mut y = 90;
+    let mut y = if st.snap_bytes > 0 { 98 } else { 90 };
     for h in st.hosts.iter().filter(|h| h.cred_len > 0).take(3) {
         theme::text(d, &alloc::format!(".{} {}", h.ip[3], h.cred_str()), PANEL_X, y, theme::BODY_FONT, RADAR_GREEN);
         y += 11;
     }
     theme::hint(d, i18n::t(hacking::ANY_KEY_TO_STOP));
+}
+
+/// Interactive camera-control screen: target camera + PTZ/snapshot status + hints.
+pub fn draw_camctl<D: DrawTarget<Color = Rgb565>>(d: &mut D, ctl: &camscan::CamCtl) {
+    theme::topbar(d, i18n::t(hacking::CAM_CONTROL));
+    theme::fill(d, 0, 20, theme::W as u32, (theme::HINT_Y - 22) as u32, theme::BG);
+    let ipr = ctl.ip;
+    theme::text_center(
+        d,
+        &alloc::format!("{}.{}.{}.{}:{}", ipr[0], ipr[1], ipr[2], ipr[3], ctl.port),
+        theme::W / 2,
+        30,
+        theme::TITLE_FONT,
+        theme::FG,
+    );
+    theme::text_center(d, ctl.brand, theme::W / 2, 48, theme::BODY_FONT, theme::MUTED);
+    if !ctl.got_ip {
+        theme::text_center(d, &alloc::format!("[{}]", ctl.phase), theme::W / 2, 70, theme::BODY_FONT, theme::accent());
+        theme::hint(d, i18n::t(hacking::ESC_EXIT));
+        return;
+    }
+    // PTZ status line
+    let ptz = if !ctl.ptz_ok {
+        (i18n::t(hacking::PTZ_NA), theme::MUTED)
+    } else {
+        match ctl.last_ptz {
+            1 => (i18n::t(hacking::PTZ_OK), RADAR_GREEN),
+            0 => (i18n::t(hacking::PTZ_FAIL), theme::DESTRUCTIVE),
+            _ => (i18n::t(hacking::PTZ_READY), theme::accent()),
+        }
+    };
+    theme::text_center(d, &alloc::format!("PTZ: {} ({})", ptz.0, ctl.moves), theme::W / 2, 70, theme::BODY_FONT, ptz.1);
+    if ctl.snap_bytes > 0 {
+        theme::text_center(
+            d,
+            &alloc::format!("{} {}KB", i18n::t(hacking::SNAP_SAVED), (ctl.snap_bytes + 512) / 1024),
+            theme::W / 2,
+            88,
+            theme::BODY_FONT,
+            RADAR_GREEN,
+        );
+    }
+    let phase = if matches!(ctl.phase, "move" | "snap") { ctl.phase } else { "" };
+    if !phase.is_empty() {
+        theme::text_center(d, phase, theme::W / 2, 104, theme::BODY_FONT, theme::accent());
+    }
+    theme::hint(d, i18n::t(hacking::CAM_CTL_HINT));
 }
 
 // ---- list navigation helpers (skip the difficulty headers) ----

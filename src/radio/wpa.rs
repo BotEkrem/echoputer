@@ -145,6 +145,9 @@ pub struct Handshake {
     pub eapol_len: usize,
     pub mic: [u8; 16],
     pub key_ver: u8, // 2 = WPA2/CCMP (HMAC-SHA1 MIC); 1 = WPA/TKIP (HMAC-MD5, TODO)
+    /// When `Some`, this is a clientless PMKID capture: crack via the PMK-Name HMAC
+    /// instead of the 4-way MIC (anonce/snonce/eapol/mic are then unused).
+    pub pmkid: Option<[u8; 16]>,
 }
 impl Handshake {
     pub fn new() -> Self {
@@ -159,6 +162,7 @@ impl Handshake {
             eapol_len: 0,
             mic: [0; 16],
             key_ver: 2,
+            pmkid: None,
         }
     }
     pub fn ssid_str(&self) -> &str {
@@ -187,6 +191,15 @@ fn prf512(key: &[u8], label: &[u8], data: &[u8], out: &mut [u8; 64]) {
 /// Does `pass` produce the captured MIC? PMK -> PTK (PRF) -> KCK=PTK[0..16] ->
 /// MIC = HMAC-SHA1(KCK, eapol)[0..16], compared to the captured MIC. WPA2 only.
 pub fn check_passphrase(hs: &Handshake, pass: &str) -> bool {
+    // PMKID path (clientless): PMKID = HMAC-SHA1(PMK, "PMK Name" || AP || STA)[0..16].
+    if let Some(want) = hs.pmkid {
+        let pmk = wpa_pmk(pass, hs.ssid_str());
+        let mut m = Vec::with_capacity(20);
+        m.extend_from_slice(b"PMK Name");
+        m.extend_from_slice(&hs.ap_mac);
+        m.extend_from_slice(&hs.cli_mac);
+        return hmac_sha1(&pmk, &m)[..16] == want;
+    }
     if hs.key_ver != 2 {
         return false; // WPA1/TKIP (HMAC-MD5) not handled yet
     }
@@ -240,6 +253,19 @@ pub fn crack_bytes(
 /// exactly what `check_passphrase` consumes.
 pub fn to_hc22000(hs: &Handshake) -> String {
     let mut s = String::new();
+    // PMKID line (type 01): WPA*01*PMKID*AP_MAC*STA_MAC*ESSID*** (no nonce/eapol/mp).
+    if let Some(pmkid) = hs.pmkid {
+        s.push_str("WPA*01*");
+        hex_push(&mut s, &pmkid);
+        s.push('*');
+        hex_push(&mut s, &hs.ap_mac);
+        s.push('*');
+        hex_push(&mut s, &hs.cli_mac);
+        s.push('*');
+        hex_push(&mut s, &hs.ssid[..hs.ssid_len]);
+        s.push_str("***");
+        return s;
+    }
     s.push_str("WPA*02*");
     hex_push(&mut s, &hs.mic);
     s.push('*');
@@ -279,6 +305,8 @@ pub struct EapolKey<'a> {
     pub frame: &'a [u8],
     pub sta: [u8; 6],   // the non-AP station
     pub bssid: [u8; 6], // the access point
+    /// RSN PMKID lifted from msg1's Key Data (clientless crack material), if present.
+    pub pmkid: Option<[u8; 16]>,
 }
 
 /// Parse a raw 802.11 frame (as delivered by the promiscuous sniffer) into its
@@ -343,6 +371,19 @@ pub fn parse_eapol(d: &[u8]) -> Option<EapolKey<'_>> {
     }
     let frame_end = core::cmp::min(p + 4 + body_len, d.len());
     let frame = &d[p..frame_end];
+    // msg1 may carry an RSN PMKID KDE in its (unencrypted) Key Data — a clientless
+    // crack handle (no msg2 needed). Key Data Length @ bs+93, Key Data @ bs+95.
+    let kd_len = ((d[bs + 93] as usize) << 8) | d[bs + 94] as usize;
+    // only msg1 with UNENCRYPTED Key Data (key-info bit 0x1000 clear) carries a
+    // readable PMKID KDE; a real clientless-PMKID AP always sends it in the clear.
+    let enc_key_data = key_info & 0x1000 != 0;
+    let pmkid = if msg == 1 && !enc_key_data && kd_len >= 20 {
+        let kd_start = bs + 95;
+        let kd_end = core::cmp::min(kd_start + kd_len, d.len());
+        find_pmkid(&d[kd_start..kd_end])
+    } else {
+        None
+    };
     // STA / AP address depends on the ToDS/FromDS direction bits
     let (tods, fromds) = (d[1] & 0x01 != 0, d[1] & 0x02 != 0);
     let (bssid, sta) = if tods && !fromds {
@@ -352,7 +393,31 @@ pub fn parse_eapol(d: &[u8]) -> Option<EapolKey<'_>> {
     } else {
         (slice6(d, 16), slice6(d, 10)) // fallback: a3 = BSSID
     };
-    Some(EapolKey { msg, key_ver: (key_info & 0x0007) as u8, nonce, mic, replay, frame, sta, bssid })
+    Some(EapolKey { msg, key_ver: (key_info & 0x0007) as u8, nonce, mic, replay, frame, sta, bssid, pmkid })
+}
+
+/// Walk EAPOL Key-Data KDEs for the RSN PMKID KDE
+/// (`0xDD <len> 00-0F-AC 04 <16-byte PMKID>`) and return the PMKID. A KDE with an
+/// all-zero PMKID is treated as absent (some APs pad one in without a real value).
+fn find_pmkid(kd: &[u8]) -> Option<[u8; 16]> {
+    let mut i = 0usize;
+    while i + 2 <= kd.len() {
+        let id = kd[i];
+        let len = kd[i + 1] as usize;
+        if i + 2 + len > kd.len() {
+            break;
+        }
+        let body = &kd[i + 2..i + 2 + len];
+        if id == 0xDD && body.len() >= 20 && body[0] == 0x00 && body[1] == 0x0F && body[2] == 0xAC && body[3] == 0x04 {
+            let mut p = [0u8; 16];
+            p.copy_from_slice(&body[4..20]);
+            if p != [0u8; 16] {
+                return Some(p);
+            }
+        }
+        i += 2 + len;
+    }
+    None
 }
 
 #[inline]
@@ -467,8 +532,90 @@ pub fn networktest() {
         fail += 1;
         println!("    FAIL hc22000 export format");
     }
+    // PMKID: parse the KDE from a synthetic msg1, clientless crack, type-01 export.
+    if pmkid_ok() {
+        pass += 1;
+    } else {
+        fail += 1;
+        println!("    FAIL pmkid (parse/crack/export)");
+    }
 
     println!("    wpa crypto: {pass} pass, {fail} fail");
+}
+
+/// PMKID end-to-end self-test: build a synthetic msg1 carrying an RSN PMKID KDE,
+/// confirm `parse_eapol` lifts it, that a PMKID `Handshake` cracks to the right
+/// passphrase (and rejects a wrong one), and that the type-01 `.22000` export is
+/// well formed.
+#[cfg(feature = "networktest")]
+fn pmkid_ok() -> bool {
+    let ap = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    let sta = [0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB];
+    let ssid = "test";
+    let psk = "12345678";
+    // canonical PMKID = HMAC-SHA1(PMK, "PMK Name" || AP || STA)[0..16]
+    let pmk = wpa_pmk(psk, ssid);
+    let mut m: Vec<u8> = Vec::new();
+    m.extend_from_slice(b"PMK Name");
+    m.extend_from_slice(&ap);
+    m.extend_from_slice(&sta);
+    let mut pmkid = [0u8; 16];
+    pmkid.copy_from_slice(&hmac_sha1(&pmk, &m)[..16]);
+
+    // (a) parse: a synthetic msg1 carrying the PMKID KDE must yield it back
+    let anonce = [0x5au8; 32];
+    let m1 = build_m1_pmkid(ap, sta, &anonce, &pmkid);
+    let parse_ok = match parse_eapol(&m1) {
+        Some(k) => k.msg == 1 && k.pmkid == Some(pmkid) && k.bssid == ap && k.sta == sta,
+        None => false,
+    };
+
+    // (b) crack: a PMKID handshake accepts the right pass, rejects a wrong one
+    let mut hs = Handshake::new();
+    let sb = ssid.as_bytes();
+    hs.ssid[..sb.len()].copy_from_slice(sb);
+    hs.ssid_len = sb.len();
+    hs.ap_mac = ap;
+    hs.cli_mac = sta;
+    hs.pmkid = Some(pmkid);
+    let crack_ok = check_passphrase(&hs, psk) && !check_passphrase(&hs, "wrongpass");
+
+    // (c) export: WPA*01*pmkid*ap*sta*essid*** (9 fields, last three empty)
+    let line = to_hc22000(&hs);
+    let parts: Vec<&str> = line.split('*').collect();
+    let export_ok = parts.len() == 9
+        && parts[0] == "WPA"
+        && parts[1] == "01"
+        && parts[2].len() == 32
+        && parts[3].len() == 12
+        && parts[4].len() == 12
+        && parts[5] == "74657374"
+        && parts[6].is_empty()
+        && parts[7].is_empty()
+        && parts[8].is_empty();
+
+    parse_ok && crack_ok && export_ok
+}
+
+/// Build a synthetic msg1 (`build_eapol`) and append an RSN PMKID KDE
+/// (`DD 14 00-0F-AC 04 <16>`) to its Key Data, fixing the 802.1X body length and the
+/// Key Data Length fields so `parse_eapol` walks it correctly.
+#[cfg(feature = "networktest")]
+fn build_m1_pmkid(ap: [u8; 6], sta: [u8; 6], anonce: &[u8; 32], pmkid: &[u8; 16]) -> Vec<u8> {
+    let mut f = build_eapol(false, 0x008A, anonce, ap, sta); // msg1, key-data-len 0
+    let mut kde = [0u8; 22];
+    kde[..6].copy_from_slice(&[0xDD, 0x14, 0x00, 0x0F, 0xAC, 0x04]);
+    kde[6..22].copy_from_slice(pmkid);
+    // last 2 bytes of the body = Key Data Length (currently 00 00) -> 22, then append.
+    let n = f.len();
+    f[n - 2] = 0x00;
+    f[n - 1] = 22;
+    f.extend_from_slice(&kde);
+    // 802.1X body length field (MAC 24 + LLC/SNAP 8 + 2) = bytes 34,35: 95 -> 117.
+    let body: u16 = 95 + 22;
+    f[34] = (body >> 8) as u8;
+    f[35] = (body & 0xff) as u8;
+    f
 }
 
 /// Verify the hashcat 22000 export has the right 9 `*`-separated fields with the

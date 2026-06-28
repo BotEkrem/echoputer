@@ -33,7 +33,10 @@ fn attack(label: &str, unit: &str, limit: u32, run: impl FnOnce(&mut dyn FnMut(u
     }
 }
 
-pub fn run(radio: &mut Radio) {
+pub fn run<D: embedded_sdmmc::BlockDevice, T: embedded_sdmmc::TimeSource>(
+    radio: &mut Radio,
+    vm: &embedded_sdmmc::VolumeManager<D, T>,
+) {
     println!("\n\n======== ECHOPUTER RADIO SELFTEST ========");
 
     // 1. WiFi scan -> also picks a target for the targeted attacks.
@@ -140,7 +143,7 @@ pub fn run(radio: &mut Radio) {
 
         // 9b. Camera Finder (Tier 3) — sweep the same /24 for HTTP cameras/DVRs.
         println!("[*] Camera Finder: join '{}' + DHCP + /24 HTTP sweep + fingerprint...", ssid);
-        match radio.run_camscan(ssid, Some(""), |_r| true) {
+        match radio.run_camscan(ssid, Some(""), vm, |_r| true) {
             Ok(r) => {
                 println!(
                     "    OK  phase={} ip={}.{}.{}.{} probed={}/{} live={} cams={} cracked={}",
