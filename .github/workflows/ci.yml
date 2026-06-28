@@ -60,8 +60,18 @@ jobs:
           - { label: game boy (dmg) + mp3,  bin: echoputer-gameboy-mp3,        features: 'emu,player',   upload: 'true' }
           - { label: game boy color,        bin: echoputer-gameboy-color,      features: 'emugbc',       upload: 'true' }
           - { label: game boy color + mp3,  bin: echoputer-gameboy-color-mp3,  features: 'emugbc,player', upload: 'true' }
-          # Compile-only gate for the serial self-test path (not a shippable image).
+          # Compile-only gates (not shippable images): every non-default feature must
+          # keep compiling so a path doesn't bit-rot. selftest = drive every radio tool
+          # over serial; networktest = the no-radio crypto/parser vectors (HTTP/Digest/
+          # base64 + WPA SHA1/HMAC/PBKDF2/EAPOL/wordlist/.22000); irtest/emutest = the IR
+          # and emulator boot self-tests; keylog/psramprobe/audiodiag = diagnostics.
           - { label: self-test (gate),      bin: '',                           features: 'selftest',     upload: 'false' }
+          - { label: net-test (gate),       bin: '',                           features: 'networktest',  upload: 'false' }
+          - { label: ir-test (gate),        bin: '',                           features: 'irtest',       upload: 'false' }
+          - { label: emu-test (gate),       bin: '',                           features: 'emutest',      upload: 'false' }
+          - { label: keylog (gate),         bin: '',                           features: 'keylog',       upload: 'false' }
+          - { label: psram-probe (gate),    bin: '',                           features: 'psramprobe',   upload: 'false' }
+          - { label: audio-diag (gate),     bin: '',                           features: 'audiodiag',    upload: 'false' }
     steps:
       - uses: actions/checkout@v4
 
@@ -123,6 +133,43 @@ jobs:
           path: ${{ matrix.bin }}.bin
           if-no-files-found: error
 
+  # Build the host-side WPA crack-offload server (offload/crack-server) as a fully
+  # STATIC x86_64 Linux binary so it can be dropped on the Oracle/Xeon box with no
+  # toolchain. Built from a COPY outside the repo so the root .cargo/config.toml — which
+  # forces the xtensa target + a no_std build-std — isn't inherited; a clean stable
+  # build against the prebuilt musl std instead.
+  crack-server:
+    name: crack-server (linux-musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust + musl target
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup target add x86_64-unknown-linux-musl --toolchain stable
+          sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build static musl binary
+        run: |
+          mkdir -p "$RUNNER_TEMP/cs"
+          cp offload/crack-server/Cargo.toml "$RUNNER_TEMP/cs/"
+          cp -r offload/crack-server/src "$RUNNER_TEMP/cs/"
+          cd "$RUNNER_TEMP/cs"
+          cargo +stable build --release --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/crack-server \
+            "$GITHUB_WORKSPACE/crack-server-x86_64-linux"
+          cd "$GITHUB_WORKSPACE"
+          file crack-server-x86_64-linux || true
+          # checksum the server-install.sh verifies BEFORE installing the binary as root
+          sha256sum crack-server-x86_64-linux > crack-server-x86_64-linux.sha256
+      - name: Upload crack-server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crack-server-x86_64-linux
+          path: |
+            crack-server-x86_64-linux
+            crack-server-x86_64-linux.sha256
+          if-no-files-found: error
+
   # Cut a release PER COMMIT on every push to main: download the .bin variants the
   # matrix just built and attach them to a GitHub Release tagged with the commit's
   # short SHA, so every build is preserved and you can tell exactly which one someone
@@ -132,13 +179,15 @@ jobs:
   # needed to run it. Runs only when all variants built (needs: firmware), never on PRs.
   release:
     name: release
-    needs: firmware
+    needs: [firmware, crack-server]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download the built .bin variants
+      - name: Check out (for offload/server-install.sh)
+        uses: actions/checkout@v4
+      - name: Download the built artifacts (.bin variants + crack-server)
         uses: actions/download-artifact@v4
         with:
           path: dist
@@ -156,12 +205,16 @@ jobs:
           # Re-run safety: drop this run's release if it already exists, then make
           # it fresh. Other commits' releases are untouched (history accumulates).
           gh release delete "$TAG" --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release create "$TAG" dist/*/*.bin \
+          gh release create "$TAG" \
+            dist/*/*.bin \
+            dist/crack-server-x86_64-linux/crack-server-x86_64-linux \
+            dist/crack-server-x86_64-linux/crack-server-x86_64-linux.sha256 \
+            offload/server-install.sh \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Build #$GITHUB_RUN_NUMBER ($SHORT) — $(date -u +%Y-%m-%d)" \
             --latest \
-            --notes "Build of commit \`$SHORT\`. Download the \`.bin\` for the features you want (see the README's *Cargo features* table). Install it from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`."
+            --notes "Build of commit \`$SHORT\`. **Firmware:** grab the \`.bin\` for the features you want (see the README's *Cargo features* table) — install from bmorcelli's Launcher off an SD card, or over USB with \`espflash write-bin 0x10000 <file>.bin\`. **WPA crack-offload server (optional):** on an Ubuntu box run \`curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/server-install.sh | sudo bash\` — installs hashcat + the static \`crack-server\`. LAN / firewall only; no auth yet."
 
       - name: Prune old releases (keep the newest 10)
         env:
