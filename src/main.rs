@@ -160,6 +160,21 @@ fn clamp_scroll(sel: usize, scroll: usize, visible: usize) -> usize {
     }
 }
 
+// Boot-time network-stack self-tests, kept in their OWN `#[inline(never)]` frame so their
+// literals don't pile into `main`'s literal pool. `main` sits at the Xtensa `l32r`
+// literal-range limit (see the `inline(never)` Misc dispatch); inlining this block tipped
+// the `networktest` build over it (`dangerous relocation: l32r ... .literal.main`).
+#[cfg(feature = "networktest")]
+#[inline(never)]
+fn run_networktests() {
+    crate::radio::http::networktest();
+    crate::radio::camscan::networktest();
+    crate::radio::wpa::networktest();
+    crate::radio::sha256::networktest();
+    crate::radio::wardrive::networktest();
+    crate::config::networktest();
+}
+
 // The `irtest` gate runs an IR diagnostic loop at boot and never reaches the normal
 // app, so a few setup vars (led/ir_tx) go unused and the app body is unreachable in
 // that build only — keep the gate warning-clean without affecting the real firmware.
@@ -604,14 +619,7 @@ fn main() -> ! {
     // smoltcp loopback round-trip) + the camera classifier, no radio needed.
     // No-op in a normal build.
     #[cfg(feature = "networktest")]
-    {
-        crate::radio::http::networktest();
-        crate::radio::camscan::networktest();
-        crate::radio::wpa::networktest();
-        crate::radio::sha256::networktest();
-        crate::radio::wardrive::networktest();
-        crate::config::networktest();
-    }
+    run_networktests();
 
     loop {
         // ---- keyboard (with hold-to-repeat) ----
