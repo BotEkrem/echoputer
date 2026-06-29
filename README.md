@@ -164,6 +164,11 @@ own, Active PMKID associates itself to elicit msg1, and Evil Twin lures the clie
 onto its own 2.4 GHz AP (which also sidesteps 5 GHz, since the ESP32-S3 is 2.4 GHz
 only). Beacon and probe injection, by contrast, the blob allows.
 
+You can exercise the Camera Finder end to end without a physical IP camera with
+[`tools/fakecam.py`](tools/README.md) — a self-contained Python HTTP camera emulator
+(brand banner, Basic/Digest default-credential login, JPEG snapshot, CGI PTZ) you run on
+a PC on the same subnet.
+
 ### Compute offload
 
 When the on-device list misses, the device can offload the crack instead of giving up.
