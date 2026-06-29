@@ -133,6 +133,11 @@ pub fn card(d: &mut impl DrawTarget<Color = Rgb565>, x: i32, y: i32, w: u32, h: 
 
 /// Top bar: bold title (left), battery indicator (right), hairline divider.
 pub fn topbar(d: &mut impl DrawTarget<Color = Rgb565>, title: &str) {
+    // Clear the bar strip first: callers that paint per-tick into a framebuffer
+    // (e.g. draw_running) don't full-clear the screen, so a shorter title would
+    // otherwise leave a previous, longer title (e.g. "Handshake: pick AP" -> the
+    // shorter "PMKID Active") bleeding through. The battery/wifi band self-clears.
+    fill(d, 0, 0, W as u32, TOPBAR_Y as u32, BG);
     text(d, title, PAD, 3, TITLE_FONT, FG);
     draw_battery(d, W - PAD, 3);
     hline(d, TOPBAR_Y, BORDER);
