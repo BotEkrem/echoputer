@@ -50,6 +50,15 @@ audiodiag = []
 # is pure Rust and always available; this feature only adds .mp3 decoding.
 # Turn on with `cargo build --release --features player`.
 player = []
+# Enable real deauth/disassoc frame TX. The IDF v5.5 WiFi blob's
+# `ieee80211_raw_frame_sanity_check` rejects the deauth subtype via `esp_wifi_80211_tx`
+# (the default build surfaces this honestly). This feature defines a strong override of
+# that symbol that returns OK, so deauth frames transmit — letting Handshake Capture
+# knock a client off to force an immediate re-association (4-way) instead of waiting for a
+# natural one. build.rs adds `-Wl,--allow-multiple-definition` so our override wins the
+# link. Off by default; opt in with `--features deauth`. Ineffective against PMF/802.11w
+# (WPA3 + PMF-enabled WPA2) networks, which ignore unprotected deauth.
+deauth = []
 
 [dependencies]
 # Core HAL. `unstable` is required for the I2S driver (audio) and a few helpers.

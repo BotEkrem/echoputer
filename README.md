@@ -162,7 +162,11 @@ the closed IDF WiFi blob rejects raw deauthentication frames, so the capture pat
 never rely on a deauth — Handshake Capture waits for a client to (re)associate on its
 own, Active PMKID associates itself to elicit msg1, and Evil Twin lures the client
 onto its own 2.4 GHz AP (which also sidesteps 5 GHz, since the ESP32-S3 is 2.4 GHz
-only). Beacon and probe injection, by contrast, the blob allows.
+only). Beacon and probe injection, by contrast, the blob allows. The default build leaves
+deauth rejected and says so on the Deauth Flood screen; the opt-in `deauth` feature
+overrides the blob's frame-sanity check so deauth transmits, which lets Handshake Capture
+knock a client off to force an immediate re-association instead of waiting for a natural
+one — though PMF/802.11w networks (WPA3, and PMF-enabled WPA2) ignore unprotected deauth.
 
 You can exercise the Camera Finder end to end without a physical IP camera with
 [`tools/fakecam.py`](tools/README.md) — a self-contained Python HTTP camera emulator
@@ -257,6 +261,7 @@ reserves the RAM the boot stack needs.
 | `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
 | `selftest` | boot-time serial self-test of every radio tool. |
 | `networktest` | boot-time serial self-test of the no-radio crypto/parser vectors: HTTP/Digest/base64/chunked, SHA-256 + HMAC-SHA256 (the signed offload), WPA SHA1/HMAC/PBKDF2/PMK + EAPOL/PMKID parse + wordlist crack + `.22000` export, the camera snapshot/PTZ path maps, the wardrive CSV rows, and the offload-config round-trip. |
+| `deauth` | enables real deauth/disassoc frame TX (overrides the IDF blob's `ieee80211_raw_frame_sanity_check`, via `--allow-multiple-definition`) so Handshake Capture can knock a client off to force an immediate 4-way instead of waiting for a natural one. Ineffective against PMF/802.11w (WPA3, PMF-enabled WPA2). |
 | `audiodiag` | logs I2S audio health (throughput, underruns) over serial once a second, for debugging the audio path. |
 
 A few more boot-time **diagnostic gates** exist for bring-up and aren't really

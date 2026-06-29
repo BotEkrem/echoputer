@@ -16,6 +16,18 @@ fn main() {
 
     build_emu();
     build_player();
+    deauth_unlock();
+}
+
+/// `--features deauth`: the deauth-TX override `ieee80211_raw_frame_sanity_check`
+/// (defined in src/radio/mod.rs, returns OK) is a STRONG symbol that collides with the
+/// same-named strong symbol in the IDF blob's `libnet80211.a` (same object file as
+/// `esp_wifi_80211_tx`, which we must link). Tell the linker to keep OUR definition
+/// (seen first) instead of erroring on the duplicate, so the override takes effect.
+fn deauth_unlock() {
+    if std::env::var_os("CARGO_FEATURE_DEAUTH").is_some() {
+        println!("cargo:rustc-link-arg=-Wl,--allow-multiple-definition");
+    }
 }
 
 /// Common Xtensa cross-compile flags shared by every vendored C core.

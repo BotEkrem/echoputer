@@ -64,7 +64,8 @@ jobs:
           # keep compiling so a path doesn't bit-rot. selftest = drive every radio tool
           # over serial; networktest = the no-radio crypto/parser vectors (HTTP/Digest/
           # base64 + WPA SHA1/HMAC/PBKDF2/EAPOL/wordlist/.22000); irtest/emutest = the IR
-          # and emulator boot self-tests; keylog/psramprobe/audiodiag = diagnostics.
+          # and emulator boot self-tests; keylog/psramprobe/audiodiag = diagnostics;
+          # deauth = the opt-in deauth-TX override (build.rs adds --allow-multiple-definition).
           - { label: self-test (gate),      bin: '',                           features: 'selftest',     upload: 'false' }
           - { label: net-test (gate),       bin: '',                           features: 'networktest',  upload: 'false' }
           - { label: ir-test (gate),        bin: '',                           features: 'irtest',       upload: 'false' }
@@ -72,6 +73,7 @@ jobs:
           - { label: keylog (gate),         bin: '',                           features: 'keylog',       upload: 'false' }
           - { label: psram-probe (gate),    bin: '',                           features: 'psramprobe',   upload: 'false' }
           - { label: audio-diag (gate),     bin: '',                           features: 'audiodiag',    upload: 'false' }
+          - { label: deauth (gate),         bin: '',                           features: 'deauth',       upload: 'false' }
     steps:
       - uses: actions/checkout@v4
 
