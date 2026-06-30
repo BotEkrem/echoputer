@@ -449,10 +449,15 @@ impl Dechunk {
                 seg = &seg[1..];
                 if self.expect_lf {
                     self.expect_lf = false;
-                    self.reading_size = false;
-                    self.size_rem = self.size_val;
-                    if self.size_val == 0 {
-                        self.done = true;
+                    // RFC 7230 §4.1: CR must be followed by LF. Complete the size line only
+                    // on a real LF; a stray byte is ignored (keep reading) rather than
+                    // silently terminating the line and misaligning the decoder.
+                    if b == b'\n' {
+                        self.reading_size = false;
+                        self.size_rem = self.size_val;
+                        if self.size_val == 0 {
+                            self.done = true;
+                        }
                     }
                     continue;
                 }
@@ -467,9 +472,11 @@ impl Dechunk {
                     }
                     b';' => self.size_ext = true, // chunk extension begins — ignore the rest
                     _ if self.size_ext => {}      // inside an extension; ignore until CR/LF
-                    b'0'..=b'9' => self.size_val = self.size_val * 16 + (b - b'0') as usize,
-                    b'a'..=b'f' => self.size_val = self.size_val * 16 + (b - b'a' + 10) as usize,
-                    b'A'..=b'F' => self.size_val = self.size_val * 16 + (b - b'A' + 10) as usize,
+                    // saturating so a 9+ digit (malicious/buggy) size can't wrap to 0 and
+                    // terminate the body early, nor wrap to a small value.
+                    b'0'..=b'9' => self.size_val = self.size_val.saturating_mul(16).saturating_add((b - b'0') as usize),
+                    b'a'..=b'f' => self.size_val = self.size_val.saturating_mul(16).saturating_add((b - b'a' + 10) as usize),
+                    b'A'..=b'F' => self.size_val = self.size_val.saturating_mul(16).saturating_add((b - b'A' + 10) as usize),
                     _ => {} // stray char in a size line — ignore
                 }
                 continue;
@@ -519,7 +526,9 @@ pub fn post_body(
     let mut reqbuf = [0u8; 1024];
     let req_len = build_post(&mut reqbuf, path, ip, body, key).len();
     if req_len == 0 {
-        return (0, None); // .22000 line too big for the request buffer
+        // status 1 = "request too big for reqbuf", kept distinct from 0 = "no network reply"
+        // so the caller can report a construction failure rather than a timeout.
+        return (1, None);
     }
     // ---- (1) fresh connection ----
     {
@@ -608,11 +617,11 @@ pub fn post_body(
         0
     };
     let b = resp_body(resp);
-    let body_opt = if b.is_empty() {
-        None
-    } else {
-        Some(alloc::string::String::from_utf8_lossy(b).trim().into())
-    };
+    // trim FIRST, then test emptiness: a whitespace-only body must map to None (the "not
+    // found" contract), not Some("") which run_offload would show as a blank cracked pass.
+    let s = alloc::string::String::from_utf8_lossy(b);
+    let t = s.trim();
+    let body_opt = if t.is_empty() { None } else { Some(alloc::string::String::from(t)) };
     (status, body_opt)
 }
 

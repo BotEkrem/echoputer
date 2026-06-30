@@ -103,7 +103,10 @@ pub fn submit(
 
     // ---- POST /crack (the server cracks synchronously; post_body waits up to 90 s) ----
     res.phase = "post";
-    let _ = tick(&res);
+    if !tick(&res) {
+        res.phase = "aborted";
+        return res; // honor an abort here instead of blocking on connect+POST (~up to 90 s)
+    }
     let mut rx = [0u8; 512];
     let mut tx = [0u8; 2048];
     let tcp_h = sockets.add(tcp::Socket::new(

@@ -1461,6 +1461,7 @@ impl Radio {
             200 => Ok(res.recovered),
             403 => Err("offload: bad PSK"),
             503 => Err("offload: server busy"),
+            1 => Err("offload: request too large"),
             0 => Err("offload: no reply"),
             _ => Err("offload: server error"),
         }
