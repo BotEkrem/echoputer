@@ -558,6 +558,11 @@ fn main() -> ! {
     // ---------------- Button + state machine ----------------
     let g0 = Input::new(peripherals.GPIO0, InputConfig::default().with_pull(Pull::Up));
     let mut g0_prev_low = false;
+    // Debounce the front button: contact bounce on press/release otherwise fires a second
+    // low-edge within a couple ms, which would immediately toggle the screen back on (blink)
+    // after a sleep — or double-trigger Synth-mode / Player-pause. Ignore edges within 250 ms
+    // of the last accepted one (well below any deliberate re-press).
+    let mut g0_last_edge = Instant::now();
 
     let mut samples = [0i16; CHUNK_FRAMES * 2];
     let chunk_bytes = core::mem::size_of_val(&samples); // i16 buffer pushed as raw LE bytes
@@ -1776,7 +1781,8 @@ fn main() -> ! {
 
         // ---- G0 button ----
         let low = g0.is_low();
-        if low && !g0_prev_low {
+        if low && !g0_prev_low && g0_last_edge.elapsed() >= Duration::from_millis(250) {
+            g0_last_edge = Instant::now();
             last_input = Instant::now();
             if screen_off {
                 // G0 wakes the screen (the panel kept its last frame) and is consumed.
