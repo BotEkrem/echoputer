@@ -27,7 +27,7 @@ use esp_hal::time::{Duration, Instant};
 
 /// Gateway / portal IP. Every DNS answer + the DHCP router/DNS option point here.
 const GW: [u8; 4] = [192, 168, 4, 1];
-/// The single address we lease to clients.
+/// Base address we lease to clients; dhcp_build varies the last octet per client.
 const LEASE: [u8; 4] = [192, 168, 4, 100];
 /// Ethernet frame MTU we advertise to smoltcp. MUST NOT exceed esp-radio's own
 /// WIFI MTU (default 1492, ESP_RADIO_CONFIG_WIFI_MTU): its TX path copies the frame
@@ -127,14 +127,17 @@ fn dhcp_parse(buf: &[u8]) -> Option<(u8, [u8; 4], [u8; 2], [u8; 16])> {
     chaddr.copy_from_slice(&buf[28..44]);
     let mut kind = 0u8;
     let mut i = 240;
-    while i + 1 < buf.len() {
+    while i < buf.len() {
         let code = buf[i];
         if code == 255 {
-            break;
+            break; // END — reachable now even when it is the final byte
         }
         if code == 0 {
             i += 1;
             continue;
+        }
+        if i + 1 >= buf.len() {
+            break; // malformed: option length byte is missing
         }
         let len = buf[i + 1] as usize;
         if code == 53 && len >= 1 && i + 2 < buf.len() {
@@ -147,6 +150,7 @@ fn dhcp_parse(buf: &[u8]) -> Option<(u8, [u8; 4], [u8; 2], [u8; 16])> {
 
 /// Build a DHCPOFFER (type 2) / DHCPACK (type 5) into `out` (>=300 bytes). Returns len.
 fn dhcp_build(out: &mut [u8], msg_type: u8, xid: [u8; 4], flags: [u8; 2], chaddr: [u8; 16]) -> usize {
+    assert!(out.len() >= 300, "dhcp_build: out buffer must be >= 300 bytes");
     let hdr = 240.min(out.len());
     for b in out[..hdr].iter_mut() {
         *b = 0;
@@ -156,7 +160,10 @@ fn dhcp_build(out: &mut [u8], msg_type: u8, xid: [u8; 4], flags: [u8; 2], chaddr
     out[2] = 6; // hlen
     out[4..8].copy_from_slice(&xid);
     out[10..12].copy_from_slice(&flags);
-    out[16..20].copy_from_slice(&LEASE); // yiaddr
+    out[16..20].copy_from_slice(&LEASE); // yiaddr (base)
+    // vary the last octet per client (.100-.107) so >1 simultaneous client doesn't get the
+    // same address; OFFER and ACK derive from the same chaddr, so they stay consistent.
+    out[19] = LEASE[3].wrapping_add(chaddr[5] & 0x07);
     out[20..24].copy_from_slice(&GW); // siaddr
     out[28..44].copy_from_slice(&chaddr);
     out[236..240].copy_from_slice(&DHCP_MAGIC);
@@ -225,7 +232,7 @@ fn dns_build(query: &[u8], out: &mut [u8]) -> usize {
     }
     // header: copy id, set response flags, qd=1, an=1, ns=ar=0
     out[..q].copy_from_slice(&query[..q]);
-    out[2] = 0x81; // QR=1, opcode=0, AA=0, TC=0, RD=copy(1)
+    out[2] = (query[2] & 0x01) | 0x80; // QR=1, opcode/AA/TC=0, RD mirrored from the query
     out[3] = 0x80; // RA=1, rcode=0
     out[4] = 0;
     out[5] = 1; // QDCOUNT = 1
@@ -362,7 +369,7 @@ fn is_probe(path: &[u8]) -> bool {
 }
 
 /// Handle one HTTP request buffer. Returns the response bytes to send.
-fn http_handle<'a>(req: &[u8], stats: &mut Stats) -> &'a [u8] {
+fn http_handle(req: &[u8], stats: &mut Stats) -> &'static [u8] {
     stats.http += 1;
     // request line: METHOD SP PATH SP HTTP/x
     let line_end = req.windows(2).position(|w| w == b"\r\n").unwrap_or(req.len());
@@ -407,9 +414,19 @@ fn http_service(sock: &mut tcp::Socket, stats: &mut Stats) {
     }
     if sock.can_recv() {
         let mut buf = [0u8; 2048];
-        let n = sock.recv_slice(&mut buf).unwrap_or(0);
-        if n > 0 {
-            let resp = http_handle(&buf[..n], stats);
+        // Drain everything currently in the RX ring before parsing: a single request can
+        // arrive as several recv_slice chunks within one poll, and reading only the first
+        // would miss a POST body that trails the headers. (A request still larger than this
+        // buffer, or one whose body lands in a strictly later poll, is the remaining gap.)
+        let mut off = 0;
+        while off < buf.len() {
+            match sock.recv_slice(&mut buf[off..]) {
+                Ok(n) if n > 0 => off += n,
+                _ => break,
+            }
+        }
+        if off > 0 {
+            let resp = http_handle(&buf[..off], stats);
             if sock.can_send() {
                 let _ = sock.send_slice(resp);
             }
