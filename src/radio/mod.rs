@@ -578,11 +578,17 @@ impl Radio {
         if !self.ensure_wifi() {
             return false;
         }
-        self.set_channel(channel);
-        match self.wifi_ifaces.as_mut() {
+        let ok = match self.wifi_ifaces.as_mut() {
             Some(i) => i.sniffer.set_promiscuous_mode(true).is_ok(),
             None => false,
+        };
+        // Pin the channel AFTER enabling promiscuous: turning promiscuous on can reset the
+        // radio to channel 1 (same gotcha capture_and_crack documents), which would put
+        // every beacon/probe/deauth TX on ch1 instead of `channel`.
+        if ok {
+            self.set_channel(channel);
         }
+        ok
     }
 
     fn disarm_tx(&mut self) {
@@ -631,6 +637,10 @@ impl Radio {
         if !self.arm_tx(channel) {
             return None;
         }
+        if ssids.is_empty() {
+            self.disarm_tx();
+            return Some(0); // nothing to send; avoid a tick(0) busy-loop
+        }
         let ifs = self.wifi_ifaces.as_mut()?;
         let delay = Delay::new();
         let mut buf = [0u8; wifi_frames::max_beacon_len(32)];
@@ -642,8 +652,9 @@ impl Radio {
                 let bytes = s.as_bytes();
                 let ssid = &bytes[..bytes.len().min(32)];
                 let n = wifi_frames::beacon(&mut buf, mac, ssid, channel, false);
-                let _ = ifs.sniffer.send_raw_frame(true, &buf[..n], false);
-                sent += 1;
+                if ifs.sniffer.send_raw_frame(true, &buf[..n], false).is_ok() {
+                    sent += 1; // count only frames the blob accepted (matches deauth's honesty)
+                }
                 seq = seq.wrapping_add(1);
                 delay.delay_millis(3);
             }
@@ -661,6 +672,10 @@ impl Radio {
         if !self.arm_tx(channel) {
             return None;
         }
+        if ssids.is_empty() {
+            self.disarm_tx();
+            return Some(0); // nothing to send; avoid a tick(0) busy-loop
+        }
         let ifs = self.wifi_ifaces.as_mut()?;
         let delay = Delay::new();
         let mut buf = [0u8; wifi_frames::max_probe_len(32)];
@@ -672,8 +687,9 @@ impl Radio {
                 let bytes = s.as_bytes();
                 let ssid = &bytes[..bytes.len().min(32)];
                 let n = wifi_frames::probe_req(&mut buf, src, ssid);
-                let _ = ifs.sniffer.send_raw_frame(true, &buf[..n], false);
-                sent += 1;
+                if ifs.sniffer.send_raw_frame(true, &buf[..n], false).is_ok() {
+                    sent += 1; // count only frames the blob accepted (matches deauth's honesty)
+                }
                 seq = seq.wrapping_add(1);
                 delay.delay_millis(3);
             }

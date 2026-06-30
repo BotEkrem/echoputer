@@ -51,6 +51,7 @@ impl<'a> Cur<'a> {
     /// Tagged information element: [tag][len][payload..].
     #[inline]
     fn ie(&mut self, tag: u8, payload: &[u8]) {
+        debug_assert!(payload.len() <= 255, "IE payload exceeds the 1-byte length field");
         self.u8(tag);
         self.u8(payload.len() as u8);
         self.bytes(payload);
