@@ -127,6 +127,10 @@ static SNIFF_TARGET: AtomicU32 = AtomicU32::new(0);
 // channel (wrong band/channel, or the blob doesn't deliver it). DBG_FRAME holds the
 // first such frame's raw bytes so we can see why the parse may reject it.
 static SNIFF_EAPOL_ETH: AtomicU32 = AtomicU32::new(0);
+// in-flight `handshake_cb` invocations. After turning promiscuous off the capture loop
+// spins on this reaching 0 (with a hard timeout) before it reads HsState, so it never
+// races a callback still mid-write — a real barrier rather than a fixed delay.
+static CB_ACTIVE: AtomicU32 = AtomicU32::new(0);
 struct DbgCell(core::cell::UnsafeCell<[u8; 80]>);
 // SAFETY: single serialized writer (the cb), read only after the cb is quiesced.
 unsafe impl Sync for DbgCell {}
@@ -218,7 +222,29 @@ pub extern "C" fn ieee80211_raw_frame_sanity_check(_typ: i32, _arg: i32, _len: i
     0
 }
 
+/// Wait for any in-flight `handshake_cb` to finish before the capture loop reads HsState.
+/// A short settle delay lets the driver stop handing us queued frames; then we spin on
+/// CB_ACTIVE with a HARD timeout, so even a missed decrement can never hang the capture.
+fn quiesce_capture_cb() {
+    let d = Delay::new();
+    d.delay_millis(5);
+    let start = Instant::now();
+    while CB_ACTIVE.load(Ordering::Acquire) != 0 && start.elapsed() < Duration::from_millis(60) {
+        d.delay_millis(1);
+    }
+}
+
 fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
+    // Mark this cb in-flight; the guard's Drop clears it on EVERY return path so the
+    // capture loop's quiesce wait sees an accurate outstanding-callback count.
+    struct Active;
+    impl Drop for Active {
+        fn drop(&mut self) {
+            CB_ACTIVE.fetch_sub(1, Ordering::Release);
+        }
+    }
+    CB_ACTIVE.fetch_add(1, Ordering::Acquire);
+    let _active = Active;
     let d = pkt.data;
     SNIFF_TOTAL.fetch_add(1, Ordering::Relaxed);
     if !d.is_empty() && (d[0] & 0x0C) == 0x08 {
@@ -792,6 +818,7 @@ impl Radio {
         SNIFF_TARGET.store(0, Ordering::Relaxed);
         SNIFF_EAPOL_ETH.store(0, Ordering::Relaxed);
         DBG_LEN.store(0, Ordering::Relaxed);
+        CB_ACTIVE.store(0, Ordering::Relaxed);
         HS_M1.store(false, Ordering::Relaxed);
         HS_M2.store(false, Ordering::Relaxed);
         HS_PMKID.store(false, Ordering::Relaxed);
@@ -886,7 +913,7 @@ impl Radio {
             }
         }
         self.disarm_tx();
-        delay.delay_millis(30); // let any in-flight cb finish before we read
+        quiesce_capture_cb(); // bounded wait for any in-flight cb, then read HsState
         let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
         // diagnostic: dump the first EAPOL-ethertype frame we saw (if any).
         let dl = DBG_LEN.load(Ordering::Relaxed) as usize;
@@ -991,6 +1018,7 @@ impl Radio {
         SNIFF_TARGET.store(0, Ordering::Relaxed);
         SNIFF_EAPOL_ETH.store(0, Ordering::Relaxed);
         DBG_LEN.store(0, Ordering::Relaxed);
+        CB_ACTIVE.store(0, Ordering::Relaxed);
         // SAFETY: written before promiscuous mode is on, so no cb is running yet.
         unsafe {
             *HS.0.get() = HsState::ZERO;
@@ -1053,7 +1081,7 @@ impl Radio {
                 break;
             }
         }
-        Delay::new().delay_millis(30); // let any in-flight cb finish before we read
+        quiesce_capture_cb(); // bounded wait for any in-flight cb, then read HsState
         let eapol = EAPOL_COUNT.load(Ordering::Relaxed);
         // SAFETY: promiscuous mode is off now; the cb is quiesced.
         let snap = unsafe { *HS.0.get() };
