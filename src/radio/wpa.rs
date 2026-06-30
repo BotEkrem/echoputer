@@ -278,7 +278,10 @@ pub fn to_hc22000(hs: &Handshake) -> String {
     hex_push(&mut s, &hs.anonce);
     s.push('*');
     hex_push(&mut s, &hs.eapol[..hs.eapol_len]);
-    s.push_str("*00"); // messagepair: M1 + M2, EAPOL taken from msg2
+    // messagepair 00 = "M1+M2, EAPOL from M2" — correct for hashcat -m 22000 in BOTH the
+    // passive case and the evil-twin case (there `anonce` is our injected EVIL_ANONCE, which
+    // legitimately plays M1's nonce). The byte does not encode capture provenance.
+    s.push_str("*00");
     s
 }
 

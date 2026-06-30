@@ -279,9 +279,15 @@ fn handshake_cb(pkt: esp_radio::wifi::sniffer::PromiscuousPkt<'_>) {
     }
     match k.msg {
         1 | 3 => {
-            st.anonce = k.nonce;
-            st.have_m1 = true;
-            HS_M1.store(true, Ordering::Relaxed);
+            // Freeze the ANonce once an M2 is already held: a late msg3 — or a different
+            // client's handshake on the same AP (likely after a broadcast deauth-assist) —
+            // must not overwrite the ANonce paired with the captured M2's MIC. Within one
+            // handshake M1.ANonce == M3.ANonce, so this only guards the cross-handshake race.
+            if !HS_M2.load(Ordering::Relaxed) {
+                st.anonce = k.nonce;
+                st.have_m1 = true;
+                HS_M1.store(true, Ordering::Relaxed);
+            }
             // msg1 may carry an RSN PMKID — a clientless crack handle (no msg2 needed).
             if k.msg == 1 {
                 if let Some(p) = k.pmkid {
@@ -977,6 +983,14 @@ impl Radio {
         HS_PMKID.store(false, Ordering::Relaxed);
         HS_CLIENT_RDY.store(false, Ordering::Relaxed);
         WANT_REPLAY.store(0, Ordering::Relaxed);
+        // also clear the diagnostic counters + the one-shot DBG_LEN gate, so a second
+        // pmkid_active run (back-to-back, no capture_and_crack between) reports per-run
+        // numbers and can still capture a debug frame.
+        SNIFF_TOTAL.store(0, Ordering::Relaxed);
+        SNIFF_DATA.store(0, Ordering::Relaxed);
+        SNIFF_TARGET.store(0, Ordering::Relaxed);
+        SNIFF_EAPOL_ETH.store(0, Ordering::Relaxed);
+        DBG_LEN.store(0, Ordering::Relaxed);
         // SAFETY: written before promiscuous mode is on, so no cb is running yet.
         unsafe {
             *HS.0.get() = HsState::ZERO;
