@@ -406,6 +406,45 @@ fn http_handle(req: &[u8], stats: &mut Stats) -> &'static [u8] {
     LOGIN_PAGE
 }
 
+/// Is the buffered HTTP request complete? Headers end at the blank line; a POST that
+/// declares Content-Length also needs that many body bytes present.
+fn request_complete(buf: &[u8]) -> bool {
+    let hdr_end = match buf.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(p) => p,
+        None => return false, // headers not finished yet
+    };
+    if !buf.starts_with(b"POST") {
+        return true; // GET / OS-probe — no body to wait for
+    }
+    match content_length(&buf[..hdr_end]) {
+        Some(cl) => buf.len() >= hdr_end + 4 + cl,
+        None => true, // POST without Content-Length — best effort
+    }
+}
+
+/// Parse the `Content-Length` header value (case-insensitive); None if absent.
+fn content_length(headers: &[u8]) -> Option<usize> {
+    let key = b"content-length:";
+    let mut i = 0;
+    while i + key.len() <= headers.len() {
+        if headers[i..i + key.len()].eq_ignore_ascii_case(key) {
+            let mut j = i + key.len();
+            while j < headers.len() && headers[j] == b' ' {
+                j += 1;
+            }
+            let (mut v, mut any) = (0usize, false);
+            while j < headers.len() && headers[j].is_ascii_digit() {
+                v = v.saturating_mul(10).saturating_add((headers[j] - b'0') as usize);
+                any = true;
+                j += 1;
+            }
+            return if any { Some(v) } else { None };
+        }
+        i += 1;
+    }
+    None
+}
+
 fn http_service(sock: &mut tcp::Socket, stats: &mut Stats) {
     // (re)arm the listener whenever the socket is idle
     if !sock.is_open() {
@@ -414,24 +453,19 @@ fn http_service(sock: &mut tcp::Socket, stats: &mut Stats) {
     }
     if sock.can_recv() {
         let mut buf = [0u8; 2048];
-        // Drain everything currently in the RX ring before parsing: a single request can
-        // arrive as several recv_slice chunks within one poll, and reading only the first
-        // would miss a POST body that trails the headers. (A request still larger than this
-        // buffer, or one whose body lands in a strictly later poll, is the remaining gap.)
-        let mut off = 0;
-        while off < buf.len() {
-            match sock.recv_slice(&mut buf[off..]) {
-                Ok(n) if n > 0 => off += n,
-                _ => break,
-            }
-        }
-        if off > 0 {
-            let resp = http_handle(&buf[..off], stats);
+        // PEEK (don't consume) so a request that spans several TCP segments / poll cycles is
+        // handled: the socket's 4 KB RX ring buffers it across polls for us. Act only once
+        // the whole request is present (headers + any declared body) — or the peek buffer is
+        // full — so a POST body arriving in a later segment is no longer dropped.
+        let n = sock.peek_slice(&mut buf).unwrap_or(0);
+        if n > 0 && (request_complete(&buf[..n]) || n >= buf.len()) {
+            let resp = http_handle(&buf[..n], stats);
             if sock.can_send() {
                 let _ = sock.send_slice(resp);
             }
             sock.close();
         }
+        // incomplete: leave the connection open and re-check on the next poll.
     }
     if sock.state() == tcp::State::CloseWait {
         sock.close();
