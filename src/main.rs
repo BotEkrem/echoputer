@@ -1641,14 +1641,14 @@ fn main() -> ! {
                                         let snap = r.snap_bytes;
                                         // effective WiFi pass to re-join for camera control:
                                         // the cracked one, else whatever we joined with.
-                                        let mut wbuf = [0u8; 24];
+                                        let mut wbuf = [0u8; 64];
                                         let wlen = {
                                             let w = if r.wifi_pass_len > 0 {
                                                 r.wifi_pass_str()
                                             } else {
                                                 known.unwrap_or("")
                                             };
-                                            let n = w.len().min(24);
+                                            let n = w.len().min(64);
                                             wbuf[..n].copy_from_slice(&w.as_bytes()[..n]);
                                             n
                                         };
@@ -1681,10 +1681,10 @@ fn main() -> ! {
                                     n
                                 };
                                 let cred = core::str::from_utf8(&credbuf[..cl]).unwrap_or("");
-                                let mut wbuf = [0u8; 24];
+                                let mut wbuf = [0u8; 64];
                                 let wl = {
                                     let w = hacking.cam_wifi_str();
-                                    let n = w.len().min(24);
+                                    let n = w.len().min(64);
                                     wbuf[..n].copy_from_slice(&w.as_bytes()[..n]);
                                     n
                                 };

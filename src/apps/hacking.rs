@@ -384,7 +384,7 @@ pub struct Hacking {
     cam_digest: bool,
     cam_cred: [u8; 24],
     cam_cred_len: usize,
-    cam_wifi: [u8; 24], // effective WiFi pass to re-associate ("" = open / user-typed)
+    cam_wifi: [u8; 64], // effective WiFi pass to re-associate ("" = open / user-typed); 64 = WPA2 max
     cam_wifi_len: usize,
     cam_ssid: [u8; 32], // the network to re-join for control (stashed at scan time)
     cam_ssid_len: usize,
@@ -426,7 +426,7 @@ impl Hacking {
             cam_digest: false,
             cam_cred: [0; 24],
             cam_cred_len: 0,
-            cam_wifi: [0; 24],
+            cam_wifi: [0; 64],
             cam_wifi_len: 0,
             cam_ssid: [0; 32],
             cam_ssid_len: 0,
