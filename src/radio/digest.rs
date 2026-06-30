@@ -147,8 +147,10 @@ pub fn parse_challenge(www_auth: &str) -> Challenge {
     c.opaque_len = find_value(s, b"opaque", &mut c.opaque);
     let mut qop = [0u8; 40];
     let qn = find_value(s, b"qop", &mut qop);
-    // qop may be `auth` or `auth,auth-int` -> we support `auth`
-    c.qop_auth = contains(&qop[..qn], b"auth");
+    // qop is a comma-separated token list (e.g. `auth` or `auth,auth-int`). Match the EXACT
+    // `auth` token — a bare `auth-int` must NOT enable our auth-only response path (we don't
+    // compute the auth-int HA2, so claiming qop=auth there would 401 on every attempt).
+    c.qop_auth = has_qop_auth(&qop[..qn]);
     c
 }
 
@@ -164,7 +166,12 @@ fn find_value(s: &[u8], key: &[u8], out: &mut [u8]) -> usize {
                 break;
             }
         }
-        let boundary = i == 0 || !s[i - 1].is_ascii_alphanumeric();
+        // boundary = start, or a non-alphanumeric that is also not '-'/'_', so a key like
+        // `no-qop` or `x-nonce` cannot falsely match `qop` / `nonce`.
+        let boundary = i == 0 || {
+            let prev = s[i - 1];
+            !prev.is_ascii_alphanumeric() && prev != b'-' && prev != b'_'
+        };
         if matches && boundary {
             let mut k = i + key.len();
             while k < s.len() && s[k] == b' ' {
@@ -202,17 +209,20 @@ fn find_value(s: &[u8], key: &[u8], out: &mut [u8]) -> usize {
     0
 }
 
-fn contains(hay: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() || hay.len() < needle.len() {
-        return needle.is_empty();
-    }
-    'outer: for i in 0..=hay.len() - needle.len() {
-        for j in 0..needle.len() {
-            if hay[i + j] != needle[j] {
-                continue 'outer;
-            }
+/// True iff the comma-separated qop token list contains the exact token `auth`
+/// (case-insensitive); a bare `auth-int` does not falsely match.
+fn has_qop_auth(list: &[u8]) -> bool {
+    for tok in list.split(|&b| b == b',') {
+        let mut t = tok;
+        while let [b' ', rest @ ..] = t {
+            t = rest;
         }
-        return true;
+        while let [rest @ .., b' '] = t {
+            t = rest;
+        }
+        if t.eq_ignore_ascii_case(b"auth") {
+            return true;
+        }
     }
     false
 }

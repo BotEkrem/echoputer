@@ -335,18 +335,23 @@ pub fn sweep<D: BlockDevice, T: TimeSource>(
             cred_lport = if cred_lport >= 64000 { 61000 } else { cred_lport + 1 };
             let ch = crate::radio::digest::parse_challenge(probe.www_auth_str());
             if ch.is_digest && ch.nonce_len > 0 {
-                for &(user, pass) in CREDS {
+                for (i, &(user, pass)) in CREDS.iter().enumerate() {
+                    // increment nc across the one reused nonce (RFC 2617 §3.2.2): strict
+                    // cameras (Hikvision) reject a replayed nc=00000001, which would make
+                    // every credential after the first a silent false-negative.
+                    let mut ncbuf = [0u8; 8];
+                    let nc = nc_hex(i as u32 + 1, &mut ncbuf);
                     let mut resp = [0u8; 32];
                     crate::radio::digest::response_hex(
                         user, ch.realm_str(), pass, "GET", "/", ch.nonce_str(), ch.qop_auth,
-                        "00000001", "0a4f113b", &mut resp,
+                        nc, "0a4f113b", &mut resp,
                     );
                     let resps = core::str::from_utf8(&resp).unwrap_or("");
                     let opaque = if ch.opaque_len > 0 { Some(ch.opaque_str()) } else { None };
                     let mut hdr = [0u8; 512];
                     let hn = crate::radio::digest::build_header(
                         user, ch.realm_str(), ch.nonce_str(), "/", resps, opaque, ch.qop_auth,
-                        "00000001", "0a4f113b", &mut hdr,
+                        nc, "0a4f113b", &mut hdr,
                     );
                     let auth = core::str::from_utf8(&hdr[..hn]).unwrap_or("");
                     let r = crate::radio::http::http_head(
@@ -927,6 +932,14 @@ where
         if !progress(probed, live.len()) {
             aborted = true;
             break;
+        }
+    }
+    // Abort any slots still open on an early exit (the 60 s safety bound or a user abort):
+    // a SynSent socket left in the set keeps smoltcp retransmitting SYNs through the later
+    // fingerprint/cred/snapshot phases.
+    for i in 0..pool {
+        if slot[i].is_some() {
+            sockets.get_mut::<tcp::Socket>(probe_h[i]).abort();
         }
     }
     (live, probed, aborted)
