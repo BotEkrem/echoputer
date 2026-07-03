@@ -278,3 +278,63 @@ pub fn draw(d: &mut impl DrawTarget<Color = Rgb565>, sel: usize, scroll: usize, 
         let _ = Triangle::new(Point::new(233, 116), Point::new(239, 116), Point::new(236, 120)).into_styled(st).draw(d);
     }
 }
+
+/// Native 320x240 render of the home menu for the EXTERNAL ILI9341 (feature `extscreen`):
+/// bigger fonts + taller cards, drawn DIRECTLY to the panel (a 2nd 320x240 framebuffer
+/// won't fit in RAM — the ADV has no PSRAM). Same items/selection/scroll as the internal
+/// menu, so the two stay in sync. `clear` = full wipe (on entry); updates redraw the top
+/// bar + the three card bands (self-clearing => no flicker).
+#[cfg(feature = "extscreen")]
+pub fn draw_ext(d: &mut impl DrawTarget<Color = Rgb565>, sel: usize, scroll: usize, clear: bool) {
+    use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_9X15};
+    const EW: i32 = 320;
+    const EH: i32 = 240;
+    const EPAD: i32 = 12;
+    const CY0: i32 = 44;
+    const CH: u32 = 58;
+    const STEP: i32 = 64;
+
+    theme::set_accent_rgb(palette::wheel(sel));
+    if clear {
+        theme::fill(d, 0, 0, EW as u32, EH as u32, theme::BG);
+    }
+    // top bar — redrawn each update so the byline tracks the highlighted app's accent
+    theme::fill(d, 0, 0, EW as u32, 36, theme::BG);
+    theme::text(d, "Echoputer", EPAD, 6, &FONT_10X20, theme::FG);
+    theme::text(d, "by", EPAD + 104, 10, &FONT_9X15, theme::MUTED);
+    theme::text(d, "BotEkrem", EPAD + 128, 10, &FONT_9X15, theme::accent());
+    theme::fill(d, 0, 35, EW as u32, 1, theme::MUTED);
+
+    let n = APPS.len();
+    for pos in 0..VISIBLE {
+        let y = CY0 + pos as i32 * STEP;
+        theme::fill(d, 0, y - 3, EW as u32, CH + 6, theme::BG); // self-clear band
+        let idx = scroll + pos;
+        if idx >= n {
+            continue;
+        }
+        let col = palette::wheel(idx);
+        let selected = idx == sel;
+        theme::card(d, EPAD, y, (EW - 2 * EPAD) as u32, CH, if selected { Some(col) } else { None });
+        draw_icon(d, APPS[idx].kind, EPAD + 18, y + 20, col);
+        let name_col = if selected { theme::FG } else { theme::MUTED };
+        theme::text(d, app_name(APPS[idx].kind), EPAD + 56, y + 12, &FONT_10X20, name_col);
+        theme::text(d, app_sub(APPS[idx].kind), EPAD + 56, y + 36, &FONT_9X15, theme::FAINT);
+        if selected {
+            theme::text_right(d, ">", EW - EPAD - 10, y + 20, &FONT_10X20, col);
+        }
+    }
+    // scroll affordances (right edge)
+    let st = PrimitiveStyle::with_fill(theme::MUTED);
+    if scroll > 0 {
+        let _ = Triangle::new(Point::new(EW - 18, CY0 + 8), Point::new(EW - 6, CY0 + 8), Point::new(EW - 12, CY0))
+            .into_styled(st)
+            .draw(d);
+    }
+    if scroll + VISIBLE < n {
+        let by = CY0 + VISIBLE as i32 * STEP - 10;
+        let _ = Triangle::new(Point::new(EW - 18, by), Point::new(EW - 6, by), Point::new(EW - 12, by + 8))
+            .into_styled(st)
+            .draw(d);
+    }
+}

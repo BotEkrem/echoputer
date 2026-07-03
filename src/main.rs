@@ -71,7 +71,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 
-use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_hal_bus::spi::{ExclusiveDevice, RefCellDevice};
 use embedded_sdmmc::{SdCard, VolumeManager};
 use mipidsi::{
     interface::SpiInterface,
@@ -79,11 +79,84 @@ use mipidsi::{
     options::{ColorInversion, Orientation, Rotation},
     Builder,
 };
+#[cfg(feature = "extscreen")]
+use mipidsi::{models::ILI9341Rgb565, options::ColorOrder};
 
 use scales::Mode as ScaleMode;
 
 /// Off-screen framebuffer backing store (rendered into, then blitted in one pass).
 static mut FB_DATA: [Rgb565; fb::W * fb::H] = [Rgb565::new(0, 0, 0); fb::W * fb::H];
+
+/// Blit the whole framebuffer to a mipidsi display in one windowed transfer.
+/// Kept `#[inline(never)]` and generic over the display so the ~9 blit call sites in
+/// `main` stay tiny: inlining `set_pixels` at each site — doubled once the external
+/// screen mirrors — pushes `main`'s `.text`/`.literal` past the Xtensa `l32r` 256 KB
+/// range ("literal target out of range" at link). One out-of-line copy per display type
+/// keeps `main` small (this also de-duplicates the internal-display blits).
+#[inline(never)]
+fn blit_fb<DI, M, RST>(d: &mut mipidsi::Display<DI, M, RST>, fbuf: &fb::FrameBuf)
+where
+    DI: mipidsi::interface::Interface,
+    M: mipidsi::models::Model<ColorFormat = Rgb565>,
+    M::ColorFormat: mipidsi::interface::InterfacePixelFormat<DI::Word>,
+    RST: embedded_hal::digital::OutputPin,
+{
+    let _ = d.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+}
+
+/// Blit the framebuffer to the EXTERNAL ILI9341, nearest-neighbor upscaled from 240x135
+/// to 320x180 (a uniform 4/3 zoom) and centered vertically on the 320x240 landscape panel,
+/// so the UI fills the panel width instead of sitting 1:1 in a corner. Aspect-preserving,
+/// so there are thin black letterbox bands top/bottom (the once-cleared background). Kept
+/// `#[inline(never)]` for the same l32r reason as `blit_fb`.
+#[cfg(feature = "extscreen")]
+#[inline(never)]
+fn blit_fb_ext<DI, M, RST>(d: &mut mipidsi::Display<DI, M, RST>, fbuf: &fb::FrameBuf)
+where
+    DI: mipidsi::interface::Interface,
+    M: mipidsi::models::Model<ColorFormat = Rgb565>,
+    M::ColorFormat: mipidsi::interface::InterfacePixelFormat<DI::Word>,
+    RST: embedded_hal::digital::OutputPin,
+{
+    const DW: usize = 320; // fill the full landscape width
+    const DH: usize = 180; // 240x135 * 4/3 -> keeps aspect; 30 px black band top+bottom of 240
+    let src = fbuf.raw();
+    let it = (0..DH).flat_map(move |dy| {
+        let row = (dy * fb::H / DH) * fb::W;
+        (0..DW).map(move |dx| src[row + dx * fb::W / DW])
+    });
+    let _ = d.set_pixels(0, 30, (DW - 1) as u16, (30 + DH - 1) as u16, it);
+}
+
+/// Route each frame to the external panel: on the home menu draw the crisp NATIVE 320x240
+/// menu (only when the selection/scroll changed — no per-frame redraw); on any other screen
+/// mirror the upscaled framebuffer. Out-of-line (`#[inline(never)]`) so `present!` stays a
+/// couple of tiny calls at its ~24 sites and `main` does not blow the Xtensa l32r range.
+#[cfg(feature = "extscreen")]
+#[inline(never)]
+fn ext_present<DI, M, RST>(
+    d: &mut mipidsi::Display<DI, M, RST>,
+    fbuf: &fb::FrameBuf,
+    on_menu: bool,
+    sel: usize,
+    scroll: usize,
+    last: &mut Option<(usize, usize)>,
+) where
+    DI: mipidsi::interface::Interface,
+    M: mipidsi::models::Model<ColorFormat = Rgb565>,
+    M::ColorFormat: mipidsi::interface::InterfacePixelFormat<DI::Word>,
+    RST: embedded_hal::digital::OutputPin,
+{
+    if on_menu {
+        if *last != Some((sel, scroll)) {
+            menu::draw_ext(d, sel, scroll, last.is_none());
+            *last = Some((sel, scroll));
+        }
+    } else {
+        blit_fb_ext(d, fbuf);
+        *last = None;
+    }
+}
 
 /// Root note (C3) of the playable range.
 const ROOT_MIDI: u8 = 48;
@@ -290,25 +363,60 @@ fn main() -> ! {
     .with_sck(peripherals.GPIO40)
     .with_mosi(peripherals.GPIO14)
     .with_miso(peripherals.GPIO39);
+    // SPI3 is a SHARED bus: the SD card always, plus (with `--features extscreen`) the
+    // external ILI9341. Each gets its own RefCellDevice with its own CS; the single-
+    // threaded main loop means the runtime RefCell borrows never overlap. `spi3_bus`
+    // is declared here in main()'s scope so it outlives `vm` (and the ext display).
+    let spi3_bus = core::cell::RefCell::new(sd_spi);
     let sd_cs = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
-    let sd_dev = ExclusiveDevice::new(sd_spi, sd_cs, Delay::new()).unwrap();
+    let sd_dev = RefCellDevice::new(&spi3_bus, sd_cs, Delay::new()).unwrap();
     let sdcard = SdCard::new(sd_dev, Delay::new());
     let vm = VolumeManager::new(sdcard, browser::DummyTimeSource);
 
     // The SD bus MUST initialise at <=400 kHz, but that clock cripples everything
     // after (emulator bank reads were ~0.3 s each -> games crawl; uploads ~50 KB/s).
-    // Force the card to acquire at 400 kHz, then re-clock SPI3 up to 20 MHz for all
-    // subsequent transfers (the card supports 25 MHz in SPI mode; the display bus
-    // already runs at 40 MHz, so the board handles it).
+    // Force the card to acquire at 400 kHz, then re-clock the shared SPI3 up to 20 MHz
+    // for all subsequent transfers (SD + the external display both run at 20 MHz; the
+    // card supports 25 MHz in SPI mode and the internal display bus is 40 MHz).
     let _ = vm.device(|sd| {
         let _ = sd.num_bytes(); // force the card to acquire (init) at 400 kHz
-        sd.spi(|dev| {
-            let _ = dev.bus_mut().apply_config(
-                &SpiConfig::default().with_frequency(Rate::from_mhz(20)).with_mode(Mode::_0),
-            );
-        });
         browser::DummyTimeSource // VolumeManager::device requires the closure to return T
     });
+    let _ = spi3_bus
+        .borrow_mut()
+        .apply_config(&SpiConfig::default().with_frequency(Rate::from_mhz(20)).with_mode(Mode::_0));
+
+    // ---------------- External ILI9341 (opt-in `extscreen`) on the shared SPI3 ----------------
+    // guicmg wiring: SCK=G40 MOSI=G14 MISO=G39 (shared with SD), CS=G5 DC=G15 RST=G13,
+    // VCC/LED from the two 5V pins. Brought up AFTER the internal panel + a ~100 ms settle
+    // (guicmg's ordering) so the external panel does not garbage during the boot/strap
+    // window. Kept in main() scope (it borrows `spi3_bus` + `ext_buf`) and mirrored to in
+    // the render loop via `present!`. The 20 MHz shared clock (set just above) is well
+    // within the ILI9341's write limit.
+    #[cfg(feature = "extscreen")]
+    let mut ext_buf = alloc::vec![0u8; 4096].into_boxed_slice();
+    #[cfg(feature = "extscreen")]
+    let mut ext_display = {
+        delay.delay_millis(100);
+        let ext_cs = Output::new(peripherals.GPIO5, Level::High, OutputConfig::default());
+        let ext_dc = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
+        let ext_rst = Output::new(peripherals.GPIO13, Level::High, OutputConfig::default());
+        let ext_dev = RefCellDevice::new(&spi3_bus, ext_cs, Delay::new()).unwrap();
+        let ext_di = SpiInterface::new(ext_dev, ext_dc, &mut ext_buf[..]);
+        // This panel's mount: Deg270 gives the right landscape + vertical direction, but
+        // it comes up horizontally MIRRORED (text reads backwards), so add .flip_horizontal().
+        // BGR because the red ILI9341 modules are BGR panels (mipidsi defaults to RGB ->
+        // red/blue swap). (Rotation/flip empirically tuned to this exact module + mount.)
+        let mut d = Builder::new(ILI9341Rgb565, ext_di)
+            .display_size(240, 320)
+            .orientation(Orientation::new().rotate(Rotation::Deg270).flip_horizontal())
+            .color_order(ColorOrder::Bgr)
+            .reset_pin(ext_rst)
+            .init(&mut delay)
+            .unwrap();
+        let _ = d.clear(Rgb565::BLACK);
+        d
+    };
 
     let mut config = crate::config::Config::new();
     config.load(&vm); // best-effort: no card / no file -> defaults
@@ -588,12 +696,20 @@ fn main() -> ! {
     // off-screen framebuffer; UI renders here, then one blit per frame -> no flash
     let mut fbuf = fb::FrameBuf::new(unsafe { &mut *core::ptr::addr_of_mut!(FB_DATA) });
 
+    // `present!` (one blit per frame) is defined further down, AFTER the loop-state
+    // locals it reads (screen, menu_sel, menu_scroll, ext_menu_last) — macro_rules
+    // resolves those at its definition site, so it must come after their `let`s.
+
     // Emulator boot self-test: exercise the GB core on-device over serial, then
     // continue to the normal menu. Off unless built with `--features emutest`.
     #[cfg(feature = "emutest")]
     apps::emu::selftest(&vm, &mut fbuf);
 
     let mut screen = Screen::Menu;
+    // Cache of (sel, scroll) last drawn to the external native menu — None = force a full
+    // redraw (on entry / after returning from another screen). extscreen only.
+    #[cfg(feature = "extscreen")]
+    let mut ext_menu_last: Option<(usize, usize)> = None;
     let mut menu_sel: usize = 0;
     let mut menu_scroll: usize = 0;
     let mut last_batt: u8 = 255;
@@ -603,8 +719,28 @@ fn main() -> ! {
     let mut screen_off = false;
     let mut dirty = false;
 
+    // One blit per frame. `present!` writes the framebuffer to the internal panel and, on
+    // the `extscreen` build, EITHER draws the crisp NATIVE 320x240 menu to the external
+    // panel (on the home menu) or mirrors the upscaled framebuffer (any other screen).
+    // With the feature off it is exactly the original single internal blit. Defined here
+    // (after the loop-state locals) so its references resolve; `blit!` below aliases it.
+    macro_rules! present {
+        () => {{
+            blit_fb(&mut display, &fbuf);
+            #[cfg(feature = "extscreen")]
+            ext_present(
+                &mut ext_display,
+                &fbuf,
+                screen == Screen::Menu,
+                menu_sel,
+                menu_scroll,
+                &mut ext_menu_last,
+            );
+        }};
+    }
+
     menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
-    let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+    present!();
 
     // Start the preemptive scheduler. esp-radio (WiFi/BLE, used lazily in the Hacking
     // menu) requires it to be running before any radio init. All hardware above is
@@ -838,7 +974,7 @@ fn main() -> ! {
                                     mac: [mb[0], mb[1], mb[2], mb[3], mb[4], mb[5]],
                                 };
                                 webui.draw_status(&mut fbuf, webui::Phase::Connecting);
-                                let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                present!();
                                 let mut last = Instant::now();
                                 let _ = radio.serve_webui(&vm, &sys, |st| {
                                     let mut stop = false;
@@ -862,7 +998,7 @@ fn main() -> ! {
                                             _ => webui::Phase::Connecting,
                                         };
                                         webui.draw_status(&mut fbuf, phase);
-                                        let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                        present!();
                                     }
                                     true
                                 });
@@ -871,7 +1007,7 @@ fn main() -> ! {
                                 menu::draw(&mut fbuf, menu_sel, menu_scroll, true);
                             } else {
                                 webui.enter(&mut fbuf); // "scanning WiFi..."
-                                let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                present!();
                                 webui.begin_scan();
                                 match radio.scan() {
                                     Some(aps) => {
@@ -962,7 +1098,7 @@ fn main() -> ! {
                                 wifi_connect_only = true;
                                 screen = Screen::WebUi;
                                 webui.enter(&mut fbuf); // "scanning WiFi..."
-                                let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                present!();
                                 webui.begin_scan();
                                 match radio.scan() {
                                     Some(aps) => {
@@ -1034,7 +1170,7 @@ fn main() -> ! {
                         // Establish the ONE shared, persistent connection — used by
                         // the Internet item and the Web UI dashboard alike. Abortable.
                         webui.draw_status(&mut fbuf, webui::Phase::Connecting);
-                        let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                        present!();
                         let ok = radio
                             .connect_sta(ssid, pw, || {
                                 let mut stop = false;
@@ -1099,7 +1235,7 @@ fn main() -> ! {
                                         _ => webui::Phase::Connecting,
                                     };
                                     webui.draw_status(&mut fbuf, phase);
-                                    let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                                    present!();
                                 }
                                 true
                             });
@@ -1131,7 +1267,7 @@ fn main() -> ! {
                     // abort key (any key, or G0) — returning false stops the attack.
                     macro_rules! blit {
                         () => {
-                            let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+                            present!();
                         };
                     }
                     macro_rules! run_attack {
@@ -2062,7 +2198,7 @@ fn main() -> ! {
 
         // ---- blit the whole framebuffer in one pass (no clear-then-draw flash) ----
         if dirty {
-            let _ = display.set_pixels(0, 0, (fb::W - 1) as u16, (fb::H - 1) as u16, fbuf.pixels());
+            present!();
             dirty = false;
         }
     }

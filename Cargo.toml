@@ -59,6 +59,12 @@ player = []
 # link. Off by default; opt in with `--features deauth`. Ineffective against PMF/802.11w
 # (WPA3 + PMF-enabled WPA2) networks, which ignore unprotected deauth.
 deauth = []
+# External ILI9341 SPI screen on the shared SPI3 bus (the SD card's bus) as a SECOND
+# mipidsi display: CS=G5, DC=G15, RST=G13, with SCK=G40/MOSI=G14/MISO=G39 shared and
+# VCC/LED from the two 5V pins (guicmg wiring). The UI framebuffer is mirrored to it
+# each frame. Off by default (default builds are byte-identical); opt in with
+# `--features extscreen`.
+extscreen = []
 
 [dependencies]
 # Core HAL. `unstable` is required for the I2S driver (audio) and a few helpers.

@@ -28,6 +28,13 @@ impl FrameBuf {
     pub fn raw_mut(&mut self) -> &mut [Rgb565] {
         self.buf
     }
+
+    /// Direct row-major READ access — used by the external-screen upscaler to sample
+    /// the 240x135 UI while blitting it (nearest-neighbor) onto the larger ILI9341.
+    #[cfg(feature = "extscreen")]
+    pub fn raw(&self) -> &[Rgb565] {
+        self.buf
+    }
 }
 
 impl Dimensions for FrameBuf {
