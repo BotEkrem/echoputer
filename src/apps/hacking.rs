@@ -317,6 +317,21 @@ impl Ap {
     const EMPTY: Ap = Ap { ssid: [0; 32], ssid_len: 0, bssid: [0; 6], rssi: 0, channel: 0, auth: "", age: 0 };
 }
 
+/// A remembered WiFi network (SSID + password), loaded from SD (/ECHO/DATA/WIFI.BIN)
+/// when the target picker opens so a known AP's password PRE-FILLS on select (Camera
+/// Finder / LAN Scan), exactly like the Web UI picker. Mirrors src/apps/webui.rs.
+const MAX_KNOWN: usize = 8;
+#[derive(Clone, Copy)]
+struct KnownNet {
+    ssid: [u8; 32],
+    ssid_len: u8,
+    pw: [u8; 64],
+    pw_len: u8,
+}
+impl KnownNet {
+    const EMPTY: KnownNet = KnownNet { ssid: [0; 32], ssid_len: 0, pw: [0; 64], pw_len: 0 };
+}
+
 #[derive(Clone, Copy)]
 struct Ble {
     addr: [u8; 6],
@@ -390,6 +405,8 @@ pub struct Hacking {
     cam_ssid_len: usize,
     wd_ble: u32,  // BLE devices logged by the last Wardrive (AP count is attack_sent)
     wd_sd: bool,  // the last Wardrive had a writable SD card
+    known: [KnownNet; MAX_KNOWN], // remembered WiFi creds -> pre-fill password on target pick
+    known_count: usize,
 }
 
 impl Hacking {
@@ -432,6 +449,8 @@ impl Hacking {
             cam_ssid_len: 0,
             wd_ble: 0,
             wd_sd: false,
+            known: [KnownNet::EMPTY; MAX_KNOWN],
+            known_count: 0,
         }
     }
 
@@ -865,6 +884,15 @@ impl Hacking {
                         self.wifi_pass_len = 0;
                         self.wifi_crack = false;
                         if self.aps[self.sel].auth != "open" {
+                            // Pre-fill the saved password if this network was joined
+                            // before (editable + visible) — mirrors the Web UI picker.
+                            let sl = self.aps[self.sel].ssid_len as usize;
+                            let mut ssid = [0u8; 32];
+                            ssid[..sl].copy_from_slice(&self.aps[self.sel].ssid[..sl]);
+                            if let Some((pw, pl)) = self.known_pw(&ssid[..sl]) {
+                                self.wifi_pass[..pl].copy_from_slice(&pw[..pl]);
+                                self.wifi_pass_len = pl;
+                            }
                             self.edit = Edit::WifiPass;
                             self.view = View::TextInput;
                             self.draw(d, true);
@@ -939,6 +967,36 @@ impl Hacking {
         self.sel = 0;
         self.scan_failed = false;
     }
+    /// Forget all remembered networks (call before re-loading from SD).
+    pub fn clear_known(&mut self) {
+        self.known_count = 0;
+    }
+
+    /// Remember a WiFi credential (from SD) so its password pre-fills when its AP is
+    /// picked in the target list. Same contract as the Web UI's `add_known`.
+    pub fn add_known(&mut self, ssid: &[u8], pw: &[u8]) {
+        if self.known_count >= MAX_KNOWN || ssid.len() > 32 || pw.len() > 64 {
+            return;
+        }
+        let c = &mut self.known[self.known_count];
+        c.ssid[..ssid.len()].copy_from_slice(ssid);
+        c.ssid_len = ssid.len() as u8;
+        c.pw[..pw.len()].copy_from_slice(pw);
+        c.pw_len = pw.len() as u8;
+        self.known_count += 1;
+    }
+
+    /// The saved password for `ssid`, copied out (so it can be written into `wifi_pass`
+    /// without aliasing the `known` borrow).
+    fn known_pw(&self, ssid: &[u8]) -> Option<([u8; 64], usize)> {
+        for c in &self.known[..self.known_count] {
+            if &c.ssid[..c.ssid_len as usize] == ssid {
+                return Some((c.pw, c.pw_len as usize));
+            }
+        }
+        None
+    }
+
     pub fn push_ap(&mut self, ssid: &str, bssid: [u8; 6], rssi: i8, channel: u8, auth: &'static str) {
         if self.ap_count >= MAX_APS {
             return;

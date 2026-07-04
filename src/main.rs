@@ -1406,6 +1406,10 @@ fn main() -> ! {
                                 }
                                 None => hacking.set_scan_failed(),
                             }
+                            // Pre-load remembered WiFi passwords so a known AP's password
+                            // comes pre-filled when picked (mirrors the Web UI picker).
+                            hacking.clear_known();
+                            radio::webui::load_creds(&vm, |s, p| hacking.add_known(s, p));
                             hacking.show_targets(&mut fbuf);
                         }
                         hacking::Action::Deauth => {
