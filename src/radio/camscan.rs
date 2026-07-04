@@ -784,13 +784,16 @@ pub struct CamCtl {
     pub moves: u32,          // PTZ moves issued this session
 }
 
-/// Can we drive this brand's PTZ over plain HTTP GET? Only brands `ptz_paths` can
-/// actually build a working command for: Dahua (`ptz.cgi` start/stop) and the
-/// GoAhead/unknown Foscam-clone family (`decoder_control.cgi` onestep). Hikvision /
-/// Axis / Reolink / Boa / Xiongmai / ONVIF need PUT+XML / SOAP / a session token we
-/// don't speak — reported as "n/a" rather than claiming a move that would 401/404.
+/// Can we ATTEMPT this brand's PTZ over plain HTTP GET? Dahua + the realm-only "unknown
+/// camera" bucket use `ptz.cgi` start/stop; the GoAhead/unknown Foscam-clone family uses
+/// `decoder_control.cgi` onestep (both via `ptz_paths`). We include `"camera (realm)"`
+/// (a DVR that only announced a camera login realm, no brand banner — best-effort, since
+/// most such boxes are Dahua/XM clones that speak `ptz.cgi`) so the arrows are never
+/// silently dead on a controllable camera. Hikvision / Axis / Reolink / Boa / Xiongmai /
+/// ONVIF need PUT+XML / SOAP / a session token we don't speak — a wrong guess just 401/404s
+/// (reported as a failed move) rather than moving, which is harmless.
 pub fn ptz_supported(brand: &str) -> bool {
-    matches!(brand, "Dahua" | "GoAhead cam" | "")
+    matches!(brand, "Dahua" | "GoAhead cam" | "camera (realm)" | "")
 }
 
 /// Build the `(move, optional-stop)` GET paths for a momentary PTZ nudge. Dahua uses
@@ -799,7 +802,8 @@ pub fn ptz_supported(brand: &str) -> bool {
 /// query, no header). Returns `None` for brands we can't drive over GET.
 fn ptz_paths(brand: &str, dir: PtzDir, user: &str, pass: &str) -> Option<(String, Option<String>)> {
     match brand {
-        "Dahua" => {
+        // Dahua + the realm-only "unknown camera" bucket -> ptz.cgi start/stop (best-effort).
+        "Dahua" | "camera (realm)" => {
             let code = match dir {
                 PtzDir::Up => "Up",
                 PtzDir::Down => "Down",
