@@ -60,6 +60,7 @@ jobs:
           - { label: game boy (dmg) + mp3,  bin: echoputer-gameboy-mp3,        features: 'emu,player',   upload: 'true' }
           - { label: game boy color,        bin: echoputer-gameboy-color,      features: 'emugbc',       upload: 'true' }
           - { label: game boy color + mp3,  bin: echoputer-gameboy-color-mp3,  features: 'emugbc,player', upload: 'true' }
+          - { label: external screen,       bin: echoputer-extscreen,          features: 'extscreen',    upload: 'true' }
           # Compile-only gates (not shippable images): every non-default feature must
           # keep compiling so a path doesn't bit-rot. selftest = drive every radio tool
           # over serial; networktest = the no-radio crypto/parser vectors (HTTP/Digest/

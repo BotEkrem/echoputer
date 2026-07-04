@@ -258,6 +258,7 @@ reserves the RAM the boot stack needs.
 | `player` | MP3 decode in the Player (vendors minimp3). |
 | `emu` | Game Boy emulator, monochrome (Peanut-GB). Clean in-game audio. |
 | `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. |
+| `extscreen` | mirrors the UI to an external ILI9341 SPI screen — a second display on the SD's shared SPI3 bus, with a native 320×240 home menu. A hardware mod; wiring + details in the wiki (External ILI9341 Screen). |
 | `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
 | `selftest` | boot-time serial self-test of every radio tool. |
 | `networktest` | boot-time serial self-test of the no-radio crypto/parser vectors: HTTP/Digest/base64/chunked, SHA-256 + HMAC-SHA256 (the signed offload), WPA SHA1/HMAC/PBKDF2/PMK + EAPOL/PMKID parse + wordlist crack + `.22000` export, the camera snapshot/PTZ path maps, the wardrive CSV rows, and the offload-config round-trip. |
@@ -271,12 +272,12 @@ PSRAM size). CI compiles all of these so they never bit-rot.
 
 Combine them as you like — `cargo build --release --features emugbc,player` is the
 full build. You don't have to build any of these yourself, though: every push to
-`main` builds all six and publishes them as a GitHub Release tagged with that commit,
+`main` builds all seven and publishes them as a GitHub Release tagged with that commit,
 so every build is kept and you can tell exactly which one you have. The newest is
 always the repo's [latest release](../../releases/latest) (each is a per-run CI
 artifact too). Grab the `.bin` whose name lists the features you want (`echoputer-base`,
 `echoputer-mp3`, `echoputer-gameboy`, `echoputer-gameboy-mp3`, `echoputer-gameboy-color`,
-`echoputer-gameboy-color-mp3`) and flash it as above.
+`echoputer-gameboy-color-mp3`, `echoputer-extscreen`) and flash it as above.
 
 ## How it fits together
 
