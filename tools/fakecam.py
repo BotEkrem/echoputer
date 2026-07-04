@@ -60,6 +60,14 @@ class Cam(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # we print our own concise lines
 
+    def handle(self):
+        # the Cardputer's concurrent /24 sweep opens + resets many sockets; swallow the
+        # resulting reset / broken-pipe so the console isn't spammed with tracebacks.
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+
     # --- auth ---
     def _ok_basic(self, h):
         if not h or not h.startswith("Basic "):
