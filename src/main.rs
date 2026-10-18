@@ -164,7 +164,7 @@ const ROOT_MIDI: u8 = 48;
 const CHUNK_FRAMES: usize = 256;
 
 // Named keys (logical row, col).
-const K_HOME: (u8, u8) = (0, 0); // the ` (top-left / ESC) key: go BACK one level
+pub(crate) const K_HOME: (u8, u8) = (0, 0); // the ` (top-left / ESC) key: go BACK one level
 pub(crate) const K_UP: (u8, u8) = (2, 11);
 pub(crate) const K_DOWN: (u8, u8) = (3, 11);
 pub(crate) const K_LEFT: (u8, u8) = (3, 10);
@@ -600,6 +600,26 @@ fn main() -> ! {
     // BMI270 IMU (Misc Level + Step counter): probe + upload its 8 KB config blob.
     let _ = bmi270::init(&mut i2c);
 
+    // ---------------- Grove Mini Track Ball (opt-in `trackball`) on a 2nd I2C bus ----------------
+    // Grove PORT.A breaks out GPIO2 + GPIO1 as its two signal pins; wire them as a SECOND I2C
+    // bus (I2C1) for the ball's STM8 (addr 0x4A). SDA=GPIO2, SCL=GPIO1 — swap these two if the
+    // probe below reports "no ACK" (the Grove SDA/SCL order vs these pins is the one thing to
+    // confirm on this board). The internal keyboard/codec/IMU bus stays on I2C0 (G8/G9).
+    #[cfg(feature = "trackball")]
+    let (mut i2c_tb, mut trackball) = {
+        let mut bus = I2c::new(
+            peripherals.I2C1,
+            I2cConfig::default().with_frequency(Rate::from_khz(100)),
+        )
+        .unwrap()
+        .with_sda(peripherals.GPIO2)
+        .with_scl(peripherals.GPIO1);
+        let mut tb = crate::hal::trackball::Trackball::new();
+        let ok = tb.probe(&mut bus);
+        esp_println::println!("TRACKBALL probe @0x4A: {}", if ok { "OK" } else { "no ACK" });
+        (bus, tb)
+    };
+
     // ---------------- I2S audio out ----------------
     // The GBC build (Walnut-CGB) needs the RAM the larger colour core eats, so it
     // trims this DMA ring (still ~0.13 s at 16 kHz, refilled every loop). The
@@ -813,7 +833,21 @@ fn main() -> ! {
                         esp_println::println!("REPEAT r{} c{}", r, c);
                         tca8418::KeyEvent { pressed: true, row: r, col: c }
                     }
-                    _ => break,
+                    // No keyboard event and nothing to repeat: let the Grove trackball
+                    // (if built in) supply a synthetic nav event; otherwise end the drain.
+                    _ => {
+                        #[cfg(feature = "trackball")]
+                        {
+                            match trackball.next(&mut i2c_tb) {
+                                Some(e) => e,
+                                None => break,
+                            }
+                        }
+                        #[cfg(not(feature = "trackball"))]
+                        {
+                            break
+                        }
+                    }
                 },
             };
             // The "Aa" key is a caps toggle (the keyboard has no hardware caps-lock):

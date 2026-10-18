@@ -212,6 +212,11 @@ where it has a real job — Synthwave cycles the scale, the Game Boy emulator an
 Player control playback, and the Remote app toggles its USB/Bluetooth connection.
 The top bar shows battery percent and a fill icon on the right.
 
+Built with `--features trackball`, a Grove Mini Track Ball on the Grove port mirrors
+these controls: roll it to move the selection (it maps to the arrow keys, with
+micro-rolls banked so many small nudges add up to one step), single-click to select
+(ENTER), and double-click to go back (ESC).
+
 ## Building and flashing
 
 You need Espressif's Xtensa Rust toolchain and espflash:
@@ -259,6 +264,7 @@ reserves the RAM the boot stack needs.
 | `emu` | Game Boy emulator, monochrome (Peanut-GB). Clean in-game audio. |
 | `emugbc` | Game Boy Color (Walnut-CGB): the colour palette, but the heavier core runs ~27 fps off the SD card so its in-game audio is choppy — the DMG (`emu`) build sounds clean. |
 | `extscreen` | mirrors the UI to an external ILI9341 SPI screen — a second display on the SD's shared SPI3 bus, with a native 320×240 home menu. A hardware mod; wiring + details in the wiki (External ILI9341 Screen). |
+| `trackball` | a Grove Mini Track Ball drives menu/app navigation — roll = arrow keys, single click = ENTER, double click = ESC (back) — over a second I2C bus (I2C1) on the Grove PORT.A pins, synthesizing the same key events the keyboard does. A hardware mod; wiring + details in the wiki (Grove Mini Track Ball). |
 | `emutest` | boot-time serial self-test of the emulator core (implies `emu`). |
 | `selftest` | boot-time serial self-test of every radio tool. |
 | `networktest` | boot-time serial self-test of the no-radio crypto/parser vectors: HTTP/Digest/base64/chunked, SHA-256 + HMAC-SHA256 (the signed offload), WPA SHA1/HMAC/PBKDF2/PMK + EAPOL/PMKID parse + wordlist crack + `.22000` export, the camera snapshot/PTZ path maps, the wardrive CSV rows, and the offload-config round-trip. |
@@ -326,6 +332,7 @@ src/
 |-------|------------|
 | Display, ST7789V2 240x135 | SPI2, SCK 36, MOSI 35, CS 37, DC 34, RST 33, backlight 38 |
 | Keyboard, TCA8418 @ 0x34 | I2C, SDA 8, SCL 9 |
+| Grove Mini Track Ball @ 0x4A (opt-in, `--features trackball`) | I2C1, SDA 2, SCL 1 (Grove PORT.A); roll = arrows, 1 click = ENTER, 2 clicks = ESC. Power from 3.3V — its I2C pull-ups must not put 5V on the GPIOs. |
 | IMU, BMI270 @ 0x68 | I2C, SDA 8, SCL 9 (6-axis accel+gyro; no magnetometer, so no compass) |
 | Audio, ES8311 @ 0x18 + NS4150B | I2S0, BCLK 41, WS 43, DOUT 42 (playback only; the codec's mic ADC on DIN 46 is wired but unused — I2S RX capture is unresolved on esp-hal, a possible future feature) |
 | SD card | SPI3, SCK 40, MOSI 14, MISO 39, CS 12, FAT32 |

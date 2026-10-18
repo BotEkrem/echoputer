@@ -65,6 +65,13 @@ deauth = []
 # each frame. Off by default (default builds are byte-identical); opt in with
 # `--features extscreen`.
 extscreen = []
+# Grove Mini Track Ball (Seeed, I2C 0x4A) on the Grove PORT.A pins (SDA/SCL = GPIO2/GPIO1)
+# as a SECOND I2C bus (I2C1; the internal keyboard/codec/IMU bus is I2C0 on G8/G9). The ball
+# drives menu/app navigation: roll = arrows, single click = ENTER, double click = ESC(back).
+# Off by default (default builds are byte-identical); opt in with `--features trackball`.
+# NOTE: power the module from 3.3V, not the Grove 5V — its I2C pull-ups must not put 5V on
+# the (non-5V-tolerant) ESP32-S3 GPIOs.
+trackball = []
 
 [dependencies]
 # Core HAL. `unstable` is required for the I2S driver (audio) and a few helpers.

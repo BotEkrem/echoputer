@@ -10,5 +10,7 @@ pub mod fb;
 pub mod ir;
 pub mod keymap;
 pub mod tca8418;
+#[cfg(feature = "trackball")]
+pub mod trackball;
 pub mod usb_hid;
 pub mod ws2812;
