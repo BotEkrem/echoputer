@@ -403,13 +403,14 @@ fn main() -> ! {
         let ext_rst = Output::new(peripherals.GPIO13, Level::High, OutputConfig::default());
         let ext_dev = RefCellDevice::new(&spi3_bus, ext_cs, Delay::new()).unwrap();
         let ext_di = SpiInterface::new(ext_dev, ext_dc, &mut ext_buf[..]);
-        // This panel's mount: Deg270 gives the right landscape + vertical direction, but
-        // it comes up horizontally MIRRORED (text reads backwards), so add .flip_horizontal().
-        // BGR because the red ILI9341 modules are BGR panels (mipidsi defaults to RGB ->
-        // red/blue swap). (Rotation/flip empirically tuned to this exact module + mount.)
+        // This panel's mount: the module is now mounted 180° from the original clamshell
+        // orientation, so Deg90 (= Deg270 + 180°) gives the right landscape + vertical
+        // direction; it still comes up horizontally MIRRORED (text reads backwards), so keep
+        // .flip_horizontal(). BGR because the red ILI9341 modules are BGR panels (mipidsi
+        // defaults to RGB -> red/blue swap). (Rotation/flip empirically tuned to this module + mount.)
         let mut d = Builder::new(ILI9341Rgb565, ext_di)
             .display_size(240, 320)
-            .orientation(Orientation::new().rotate(Rotation::Deg270).flip_horizontal())
+            .orientation(Orientation::new().rotate(Rotation::Deg90).flip_horizontal())
             .color_order(ColorOrder::Bgr)
             .reset_pin(ext_rst)
             .init(&mut delay)
